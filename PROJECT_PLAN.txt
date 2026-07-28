@@ -1,0 +1,181 @@
+═══════════════════════════════════════════════════════════════════════════════════════ MEMECOIN ALERT BOT — COMPLETE PROJECT PLAN Based on “A Complete (Meme)Coin Guide” by SPYZER ═══════════════════════════════════════════════════════════════════════════════════════
+Session: 2026-07-02 through 2026-07-05 User: Building a Memecoin Alert Bot for Telegram
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃ PROJECT OVERVIEW ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+GOAL: Build a Telegram bot that monitors pump.fun and sends real-time alerts for 7 signal types, using the SPYZER memecoin trading framework as the scoring methodology.
+TARGET: Catch viral memes, celebrity coins, AI agent tokens, and detect scams (bundling, honeypots, vamps) before the crowd.
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃ SIGNAL TYPES DETECTED (7 Total) ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌─────────────────┬──────────┬─────────────────────────────────────────────────────┐ │ Signal Type │ Emoji │ Description │ ├─────────────────┼──────────┼─────────────────────────────────────────────────────┤ │ AI Agent Token │ 🤖 │ Autonomous AI agents that create & trade their own │ │ │ │ tokens (Fable 5 pattern). Tokenized Agent flag on │ │ │ │ pump.fun. Auto-buyback from agent revenue. │ ├─────────────────┼──────────┼─────────────────────────────────────────────────────┤ │ Celebrity Coin │ ⭐ │ Celebrity/politician launched or endorsed. High │ │ │ │ pump & dump risk. Usually bundled. │ ├─────────────────┼──────────┼─────────────────────────────────────────────────────┤ │ Viral Meme │ 🐵 │ Animal/character goes viral on X/TikTok. First- │ │ │ │ mover advantage. Examples: Punch, MooDeng. │ ├─────────────────┼──────────┼─────────────────────────────────────────────────────┤ │ Team-Backed │ 🚀 │ Organized team with marketing budget, influencers, │ │ │ │ professional content. Often bundled. │ ├─────────────────┼──────────┼─────────────────────────────────────────────────────┤ │ CTO │ 🤝 │ Community Takeover. Dev abandoned, community took │ │ │ │ over. Example: $WIF (dogwifhat). │ ├─────────────────┼──────────┼─────────────────────────────────────────────────────┤ │ Bundling Risk │ 🚨 │ Single entity controls supply via multiple wallets. │ │ │ │ Top holder >3.5%, VOL/MC <0.8, fresh wallets. │ ├─────────────────┼──────────┼─────────────────────────────────────────────────────┤ │ Vamp Risk │ 🧛 │ Multiple coins compete for same narrative. Only │ │ │ │ canonical/first-mover wins. Others get drained. │ └─────────────────┴──────────┴─────────────────────────────────────────────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃ SCORING FRAMEWORK (From SPYZER Guide) ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+                ┌─────────────────────────────────────────┐
+                │         WEIGH ALL VARIABLES             │
+                │                                         │
+┌──────────┐    │  ┌─────────┐  ┌──────────┐  ┌───────┐ │
+│  TRADER  │───▶│  │bundling%│  │dev wallet│  │narrative│ │
+│ SPOTS A  │    │  │  (-0.30)│  │  (+0.15) │  │strength │ │
+│   COIN   │    │  └─────────┘  └──────────┘  │(+0.25)  │ │
+└──────────┘    │  ┌─────────┐  ┌──────────┐  └───────┘ │
+                │  │ market  │  │  holder  │  ┌───────┐ │
+                │  │conditions│  │  count   │  │liquidity│ │
+                │  │ (+0.10) │  │  (+0.10) │  │/TVL    │ │
+                │  └─────────┘  └──────────┘  │(+0.20)  │ │
+                │                             └───────┘ │
+                │  ┌───────────────────────────────────┐  │
+                │  │      chart structure (+0.10)      │  │
+                │  └───────────────────────────────────┘  │
+                └─────────────────────────────────────────┘
+                                │
+                                ▼
+                ┌─────────────────────────────────────────┐
+                │         COMPOSITE SCORE                 │
+                │                                         │
+                │  Score > 0.5  ──▶  ✅ BUY               │
+                │  Score > 0.2  ──▶  ⏳ WAIT              │
+                │  Score > 0    ──▶  ⚠️ DYOR              │
+                │  Score ≤ 0    ──▶  ❌ PASS              │
+                │                                         │
+                │  Risk = EXTREME ──▶  ❌ PASS (override)  │
+                └─────────────────────────────────────────┘
+                                │
+                ┌───────────────┴───────────────┐
+                ▼                               ▼
+        ┌─────────────┐               ┌─────────────┐
+        │  ✅ BUY      │               │  ❌ PASS     │
+        │  Size based  │               │  Wait for    │
+        │  on conviction│              │  better setup │
+        └─────────────┘               └─────────────┘
+                │
+                ▼
+        ┌─────────────────────────────────────┐
+        │  NEW INFO COMES IN ──▶ RE-EVALUATE  │
+        │  Adjust or Exit based on new data     │
+        └─────────────────────────────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃ SYSTEM ARCHITECTURE ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DATA INGESTION LAYER                                │
+│                                                                             │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
+│   │  PumpPortal  │  │  pump.fun API │  │  DexScreener │  │  X/Twitter │ │
+│   │  WebSocket   │  │   REST API   │  │    REST API  │  │   API v2   │ │
+│   │  (Primary)   │  │  (Fallback)  │  │ (Cross-ref)  │  │ (Viral)    │ │
+│   │  Sub-second  │  │   ~1s delay  │  │   ~5s delay  │  │  ~30s delay│ │
+│   └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘ │
+│          │                 │                 │                │        │
+│          └─────────────────┴─────────────────┘                │        │
+│                            │                                    │        │
+│                            ▼                                    ▼        │
+│                   ┌─────────────────┐                  ┌──────────────┐│
+│                   │  Codex GraphQL  │                  │  Bitquery    ││
+│                   │  (Stable Data)  │                  │  Kafka Stream││
+│                   │  Free: 10K/mo   │                  │  Paid Tier   ││
+│                   └────────┬────────┘                  └──────┬───────┘│
+│                            │                                    │        │
+└────────────────────────────┼────────────────────────────────────┼────────┘
+                             │                                    │
+                             ▼                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SIGNAL ENGINE (Python)                              │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                    COIN DATA NORMALIZER                              │   │
+│   │  • Standardize fields across all data sources                        │   │
+│   │  • Merge DexScreener volume with pump.fun market cap                 │   │
+│   │  • Calculate derived metrics (VOL/MC, age, etc.)                     │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+│                                    ▼                                        │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                    7 SIGNAL DETECTORS                                │   │
+│   │                                                                       │   │
+│   │   🤖 AI Agent      ──▶ Keyword + tokenizedAgent flag               │   │
+│   │   ⭐ Celebrity     ──▶ Name match + rapid MC growth                │   │
+│   │   🐵 Viral Meme    ──▶ Animal keyword + VOL/MC + viral X posts    │   │
+│   │   🚀 Team-Backed   ──▶ Social links + holder patterns               │   │
+│   │   🤝 CTO           ──▶ Dev abandoned + community active           │   │
+│   │   🚨 Bundling      ──▶ Top holder % + cluster analysis            │   │
+│   │   🧛 Vamp Risk     ──▶ Competing coins + canonical detection        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+│                                    ▼                                        │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                    COMPOSITE SCORER                                  │   │
+│   │  • Weight all variables per SPYZER framework                       │   │
+│   │  • Apply risk overrides (EXTREME risk = auto-PASS)                 │   │
+│   │  • Generate verdict: BUY / WAIT / DYOR / PASS                      │   │
+│   │  • Confidence score: 0.0 - 1.0                                       │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+└────────────────────────────────────┼────────────────────────────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         TELEGRAM OUTPUT LAYER                               │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                    ALERT CARD FORMATTER                              │   │
+│   │                                                                       │   │
+│   │   ═══════════════════════════════════════                            │   │
+│   │   🤖 AI AGENT TOKEN ALERT                                           │   │
+│   │   ═══════════════════════════════════════                            │   │
+│   │                                                                       │   │
+│   │   📌 Fable 5 ($FABLE5)                                              │   │
+│   │   🔗 CA: `498DeY...pump`                                             │   │
+│   │                                                                       │   │
+│   │   💰 Market Cap: $2.1M                                               │   │
+│   │   📊 Volume 24h: $890K                                               │   │
+│   │   👥 Holders: 1,247                                                  │   │
+│   │                                                                       │   │
+│   │   🔐 Safety:                                                          │   │
+│   │     • LP Locked: ✅ 99.5%                                            │   │
+│   │     • Mint Auth: ✅ Disabled                                         │   │
+│   │     • Top Holder: 2.1%                                               │   │
+│   │                                                                       │   │
+│   │   🎯 VERDICT: ✅ BUY                                                 │   │
+│   │   ⚠️ RISK: 🟡 MEDIUM                                                 │   │
+│   │   📊 Confidence: 78%                                                  │   │
+│   │                                                                       │   │
+│   │   ✅ Why triggered:                                                   │   │
+│   │     • Tokenized Agent enabled                                         │   │
+│   │     • AI keyword match                                                │   │
+│   │     • Auto-buyback mechanism                                          │   │
+│   │                                                                       │   │
+│   │   💡 Recommendations:                                                 │   │
+│   │     • Small position only                                           │   │
+│   │     • Monitor agent P&L on-chain                                      │   │
+│   │                                                                       │   │
+│   │   [🚀 Buy on pump.fun]  [📊 Chart]  [🔍 More Info]                   │   │
+│   │                                                                       │   │
+│   │   ⚠️ NFA | DYOR | Trade Responsibly                                 │   │
+│   │   ═══════════════════════════════════════                            │   │
+│   │                                                                       │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   Features:                                                                 │
+│   • Rich Markdown formatting with emojis                                    │
+│   • Inline buttons: Buy link, Chart, More info                            │
+│   • Risk color coding (🟢🟡🟠🔴)                                           │
+│   • Alert cooldown: 5 min per coin                                          │
+│   • Subscription tiers: All signals / High conviction only                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃ DATA SOURCES COMPARISON ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌─────────────────┬─────────────────┬─────────────┬──────────────┬─────────────────┐ │ Source │ Type │ Latency │ Cost │ Reliability │ ├─────────────────┼─────────────────┼─────────────┼──────────────┼─────────────────┤ │ PumpPortal WS │ WebSocket │ Sub-second │ FREE │ ⚠️ Unofficial │ │ pump.fun API │ REST (internal) │ ~1 second │ FREE │ ⚠️ Reverse-eng │ │ Codex │ GraphQL + WS │ Sub-second │ FREE (10K/mo)│ ✅ Official │ │ Bitquery │ GraphQL + Kafka │ Sub-second │ PAID │ ✅ Enterprise │ │ DexScreener │ REST │ ~5 seconds │ FREE │ ✅ Official │ │ Bubblemaps │ REST │ ~10 seconds │ PAID │ ✅ Official │ │ Solscan │ REST │ ~3 seconds │ FREE tier │ ✅ Official │ │ X API v2 │ REST │ ~30 seconds │ PAID tiers │ ✅ Official │ │ Rugcheck │ REST │ ~2 seconds │ FREE │ ✅ Official │ └─────────────────┴─────────────────┴─────────────┴──────────────┴─────────────────┘
+RECOMMENDED PRODUCTION STACK: ├── Primary: Codex (free tier) or Bitquery (paid) for real-time data ├── Fallback: PumpPortal WebSocket + pump.fun REST ├── Cross-ref: DexScreener for volume/liquidity verification ├── Safety: Rugcheck + Solscan for LP/mint authority verification └── Viral: X API v2 for narrative detection
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃ KEY DETECTION HEURISTICS (From SPYZER) ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌─────────────────────────────────────────────────────────────────────────────────────┐ │ BUNDLING DETECTION │ ├─────────────────────────────────────────────────────────────────────────────────────┤ │ • Top holder should NOT hold > 3.5% of supply │ │ • Top 10 holders combined should NOT control > 50% │ │ • VOL/MC ratio should be > 0.8 (lower = likely bundle) │ │ • Fresh wallet icons (green leaf) = bot sign │ │ • Funding origin: Same CEX, same time = same person │ │ • Chart patterns: Staircase, identical candles = bot activity │ │ • Fees paid: 15K MC should have > 0.5 SOL in fees │ ├─────────────────────────────────────────────────────────────────────────────────────┤ │ HONEYPOT RED FLAGS │ ├─────────────────────────────────────────────────────────────────────────────────────┤ │ • Up-only chart on low volume │ │ • LP NOT locked │ │ • Mint or freeze authority still enabled │ │ • Massively bundled supply │ │ • “Fresh Wallet” icons on multiple top holders │ ├─────────────────────────────────────────────────────────────────────────────────────┤ │ VAMP RISK INDICATORS │ ├─────────────────────────────────────────────────────────────────────────────────────┤ │ • Multiple coins with same narrative keyword │ │ • Generic name vs. canonical name (e.g., “Japanese Ape” vs “Ukon”) │ │ • No verified “official” coin for the narrative │ │ • First-mover advantage decays within 15-60 minutes │ ├─────────────────────────────────────────────────────────────────────────────────────┤ │ AI AGENT TOKEN SIGNS │ ├─────────────────────────────────────────────────────────────────────────────────────┤ │ • pump.fun “Tokenized Agent” toggle enabled │ │ • Automated buybacks from agent revenue │ │ • Agent trades visible on-chain (Solscan) │ │ • KOL mentions: @blknoiz06, @aixbt_agent, etc. │ │ • Keywords: “autonomous”, “AI trading”, “no human”, “agent token” │ └─────────────────────────────────────────────────────────────────────────────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃ IMPLEMENTATION STATUS ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┌─────────────────────────────────────┬──────────┬─────────────────────────────────┐ │ Component │ Status │ Notes │ ├─────────────────────────────────────┼──────────┼─────────────────────────────────┤ │ Core Signal Engine (7 detectors) │ ✅ DONE │ All signal types implemented │ │ Telegram Alert Formatter │ ✅ DONE │ Rich Markdown cards with buttons│ │ PumpPortal WebSocket integration │ ✅ DONE │ Sub-second real-time alerts │ │ pump.fun REST API integration │ ✅ DONE │ Reverse-engineered endpoints │ │ DexScreener cross-reference │ ✅ DONE │ Volume/liquidity verification │ │ Scoring Framework (SPYZER-based) │ ✅ DONE │ Weighted variable scoring │ ├─────────────────────────────────────┼──────────┼─────────────────────────────────┤ │ Codex/Bitquery Integration │ 🔄 NEXT │ Replace fragile pump.fun APIs │ │ Database + Backtesting │ ⏳ TODO │ SQLite/PostgreSQL for history │ │ NLP Narrative Detection │ ⏳ TODO │ Semantic similarity for vamps │ │ Interactive Telegram Buttons │ ⏳ TODO │ Buy links, charts, more info │ │ X API Viral Detection │ ⏳ TODO │ Engagement spike monitoring │ │ Bubblemaps Bundle API │ ⏳ TODO │ Real cluster analysis │ │ Solscan On-Chain Tracking │ ⏳ TODO │ Dev wallet activity for CTO │ └─────────────────────────────────────┴──────────┴─────────────────────────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃ PROMPT FOR NEW SESSION ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+═══════════════════════════════════════════════════════════════════════════════════════
+You are building a Memecoin Alert Bot for Telegram that monitors pump.fun and sends real-time alerts based on the SPYZER memecoin trading framework.
+The bot detects 7 signal types: 1. 🤖 AI Agent Tokens (autonomous agents creating their own tokens) 2. ⭐ Celebrity Coins (celebrity/politician launches) 3. 🐵 Viral Memes (animal/character memes going viral) 4. 🚀 Team-Backed (organized team launches) 5. 🤝 CTO (Community Takeover) 6. 🚨 Bundling Risk (supply manipulation detection) 7. 🧛 Vamp Risk (narrative competition)
+SCORING METHODOLOGY (from SPYZER’s “A Complete (Meme)Coin Guide”): - bundling% × -0.30 - dev_wallet_safe × +0.15
+- narrative_strength × +0.25 - liquidity/TVL × +0.20 - market_conditions × +0.10 - holder_count × +0.10 - chart_structure × +0.10
+Verdict: BUY (>0.5), WAIT (>0.2), DYOR (>0), PASS (≤0 or EXTREME risk)
+DATA SOURCES: - Primary: pump.fun (REST + WebSocket via PumpPortal) - Cross-ref: DexScreener (volume/liquidity) - Safety: Rugcheck + Solscan (LP locked, mint authority) - Viral: X API v2 (engagement spikes)
+CURRENT STATUS: Prototype built with all 7 detectors, Telegram formatter, and PumpPortal WebSocket. NEXT TASK: Integrate Codex or Bitquery as stable primary data source to replace fragile pump.fun reverse-engineered endpoints.
+Key references: - SPYZER Guide: “A Complete (Meme)Coin Guide” (34 pages, covers blockchain basics, liquidity pools, bundling, vamp risk, psychology, safety) - pump.fun: Solana memecoin launchpad with bonding curves - Fable 5: Example of AI agent token (autonomous trading AI) - $ANSEM: KOL pick from @blknoiz06 - $WIF: CTO example (dogwifhat, community took over after dev abandoned)
+═══════════════════════════════════════════════════════════════════════════════════════
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃ FILE INVENTORY ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+📁 /mnt/agents/output/ ├── memecoin_alert_bot_prototype.py (1,072 lines — Main bot) ├── requirements.txt (aiohttp, websockets, python-telegram-bot) ├── config_template.py (Credential template) ├── README.md (Setup guide) └── meme_coin_guide_full_text.txt (SPYZER guide full text extraction)
+📁 /mnt/agents/upload/ ├── A complete (meme)coin guide.pdf (Original 34-page PDF) └── HIi5qDpXIAA9d_L.jpg (SPYZER’s “weigh all variables” diagram)
+═══════════════════════════════════════════════════════════════════════════════════════ END OF PROJECT DOCUMENT ═══════════════════════════════════════════════════════════════════════════════════════

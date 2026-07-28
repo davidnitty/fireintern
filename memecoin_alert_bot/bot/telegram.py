@@ -1,0 +1,159 @@
+"""Telegram delivery and command handling."""
+
+from __future__ import annotations
+
+import logging
+import os
+from typing import Any
+
+from telegram import Update
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CallbackContext,
+    CommandHandler,
+    ContextTypes,
+)
+
+from memecoin_alert_bot.bot.formatter import format_alert, should_send_alert
+from memecoin_alert_bot.config import Settings
+from memecoin_alert_bot.engine.models import Alert
+from memecoin_alert_bot.storage.sqlite import Storage
+
+logger = logging.getLogger(__name__)
+
+
+class TelegramBot:
+    """Manage Telegram app lifecycle and alert delivery."""
+
+    def __init__(self, settings: Settings, storage: Storage):
+        self.settings = settings
+        self.storage = storage
+        self.application: Application | None = None
+        self._ready = False
+
+    async def setup(self) -> Application:
+        """Build the Telegram application and register command handlers."""
+        builder = ApplicationBuilder().token(self.settings.telegram_bot_token)
+        self.application = builder.build()
+        self.application.add_handler(CommandHandler("start", self._cmd_start))
+        self.application.add_handler(CommandHandler("status", self._cmd_status))
+        self.application.add_handler(CommandHandler("recent", self._cmd_recent))
+        await self.application.initialize()
+        self._ready = True
+        return self.application
+
+    async def start(self) -> None:
+        """Start polling or webhook depending on configuration."""
+        if not self._ready or self.application is None:
+            await self.setup()
+
+        await self.application.start()
+        if self.settings.webhook_url:
+            port = int(self.settings.port)
+            await self.application.updater.start_webhook(
+                listen="0.0.0.0",
+                port=port,
+                webhook_url=self.settings.webhook_url,
+            )
+            logger.info("Telegram webhook listening on port %s", port)
+        else:
+            await self.application.updater.start_polling(drop_pending_updates=True)
+            logger.info("Telegram polling started")
+
+    async def stop(self) -> None:
+        if self.application:
+            try:
+                if self.application.updater.running:
+                    await self.application.updater.stop()
+            except Exception:
+                pass
+            await self.application.stop()
+            await self.application.shutdown()
+            self._ready = False
+
+    # ------------------------------------------------------------------
+    # Command handlers
+    # ------------------------------------------------------------------
+
+    async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.effective_chat is None:
+            return
+        chat_id = update.effective_chat.id
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "🤖 *Memecoin Alert Bot*\n\n"
+                "I monitor pump.fun and score new tokens with the SPYZER framework.\n\n"
+                "Commands:\n"
+                "/start - this message\n"
+                "/status - bot status\n"
+                "/recent - recent alerts"
+            ),
+            parse_mode="Markdown",
+        )
+
+    async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.effective_chat is None:
+            return
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="✅ Bot is running and listening to PumpPortal.",
+        )
+
+    async def _cmd_recent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.effective_chat is None:
+            return
+        rows = await self.storage.recent_alerts(limit=10)
+        if not rows:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id, text="No recent alerts stored."
+            )
+            return
+        lines = ["*Recent alerts*"]
+        for r in rows:
+            lines.append(
+                f"- {r['primary_signal']} {r['symbol']} | {r['verdict']} | {r['risk']} "
+                f"({r['composite_score']:.2f})"
+            )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="\n".join(lines),
+            parse_mode="Markdown",
+        )
+
+    # ------------------------------------------------------------------
+    # Alert delivery
+    # ------------------------------------------------------------------
+
+    async def send_alert(self, alert: Alert) -> bool:
+        """Send an alert to the configured chat if it passes filters."""
+        if not should_send_alert(
+            alert,
+            mode=self.settings.subscription_mode,
+            min_confidence=self.settings.min_confidence,
+        ):
+            return False
+
+        if not self._ready or self.application is None:
+            logger.warning("Telegram application not ready; alert not sent")
+            return False
+
+        chat_id = self.settings.telegram_chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+        if not chat_id:
+            logger.warning("No TELEGRAM_CHAT_ID configured")
+            return False
+
+        try:
+            text, keyboard = format_alert(alert)
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+                disable_web_page_preview=True,
+            )
+            return True
+        except Exception:
+            logger.exception("Failed to send Telegram alert")
+            return False

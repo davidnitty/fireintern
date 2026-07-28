@@ -44,9 +44,7 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
         why_lines.append("  • No specific trigger matched")
 
     lines = [
-        "════════════════════════════════════",
-        f"{alert.primary_signal} ALERT",
-        "════════════════════════════════════",
+        "🚨 NEW Fire Intern CALL ⦿",
         "",
         f"📌 {coin.name} (${coin.symbol})",
         f"🔗 CA: `{coin.mint}`",

@@ -303,30 +303,30 @@ def detect_bundling_risk(coin: CoinData) -> Signal | None:
 
 
 def detect_vamp_risk(coin: CoinData) -> Signal | None:
-    """Detect narrative competition / vamp risk."""
-    if not coin.narrative_keywords:
-        return None
-
-    # This detector needs external context (number of coins sharing the same keyword).
-    # Without a registry we fall back to generic name heuristics.
-    name_lower = coin.name.lower()
-    generic_terms = ["official", "real", "true", "original", "new"]
-    generic_hits = [t for t in generic_terms if t in name_lower]
-
+    """Detect narrative competition / vamp risk using TF-IDF similarity."""
     reasons = []
     confidence = 0.0
+
+    # Primary signal: cosine similarity to another recent token.
+    if coin.vamp_similarity > 0.7:
+        confidence += 0.5
+        reasons.append(f"High narrative similarity ({coin.vamp_similarity:.2f})")
+    elif coin.vamp_similarity > 0.5:
+        confidence += 0.25
+        reasons.append(f"Moderate narrative similarity ({coin.vamp_similarity:.2f})")
+
+    # Legacy: generic/copycat qualifier words in name.
+    name_lower = coin.name.lower()
+    generic_terms = ["official", "real", "true", "original", "new", "v2", "2.0", "pro"]
+    generic_hits = [t for t in generic_terms if t in name_lower]
     if generic_hits:
-        confidence += 0.3
-        reasons.append(f"Generic/copycat qualifier: {', '.join(generic_hits)}")
-
-    # If we have narrative strength below average it may indicate a weaker derivative.
-    if coin.narrative_strength > 0 and coin.narrative_strength < 0.3:
         confidence += 0.2
-        reasons.append("Weak narrative differentiation")
+        reasons.append(f"Copycat qualifiers: {', '.join(generic_hits)}")
 
-    if len(coin.narrative_keywords) >= 2:
+    # Narrative keywords exist but narrative is weak.
+    if coin.narrative_keywords and coin.narrative_strength < 0.3:
         confidence += 0.15
-        reasons.append(f"Competing keywords: {', '.join(coin.narrative_keywords[:3])}")
+        reasons.append("Weak narrative differentiation")
 
     if confidence <= 0.25:
         return None

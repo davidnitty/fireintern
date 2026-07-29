@@ -86,16 +86,20 @@ def score_dev_wallet(coin: CoinData) -> float:
 
 
 def score_narrative(coin: CoinData, signals: list[Signal]) -> float:
-    """Score narrative strength from triggered signals and keyword richness."""
-    value = 0.3
-    if coin.ai_keywords or coin.narrative_keywords:
-        value += min(0.3, (len(coin.ai_keywords) + len(coin.narrative_keywords)) * 0.05)
+    """Score narrative strength from NLP analysis and triggered signals."""
+    value = coin.narrative_strength
 
-    # Boost for each non-risk signal
+    # If NLP hasn't set it yet (edge case), start from keyword richness.
+    if value == 0.0:
+        value = 0.3
+        if coin.ai_keywords or coin.narrative_keywords:
+            value += min(0.3, (len(coin.ai_keywords) + len(coin.narrative_keywords)) * 0.05)
+
+    # Boost for each non-risk signal.
     positive_signals = [s for s in signals if s.signal_type not in (
         SignalType.BUNDLING_RISK, SignalType.VAMP_RISK
     )]
-    value += min(0.4, sum(s.confidence for s in positive_signals) * 0.2)
+    value += min(0.3, sum(s.confidence for s in positive_signals) * 0.15)
 
     return min(1.0, value)
 

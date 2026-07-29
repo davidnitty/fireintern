@@ -25,6 +25,7 @@ from memecoin_alert_bot.data.solscan import SolscanClient
 from memecoin_alert_bot.data.twitter import XApiClient
 from memecoin_alert_bot.engine import detectors, normalizer, scorer
 from memecoin_alert_bot.engine.models import Alert, CoinData
+from memecoin_alert_bot.engine.nlp import get_narrative_analyzer
 from memecoin_alert_bot.storage.sqlite import Storage
 from memecoin_alert_bot.utils.helpers import setup_logging
 
@@ -181,6 +182,14 @@ class BotApp:
         ):
             logger.debug("Skipping %s — no buying activity detected", mint)
             return
+
+        # ── NLP narrative analysis ──
+        narrative_text = f"{coin.name} {coin.description}"
+        na = get_narrative_analyzer()
+        coin.narrative_keywords = na.extract_keywords(narrative_text)[:10]
+        coin.narrative_strength = na.narrative_strength(narrative_text)
+        coin.vamp_similarity = na.check_vamp_risk(narrative_text)
+        na.add_token(coin.mint, narrative_text)
 
         await self.storage.upsert_coin(coin)
 

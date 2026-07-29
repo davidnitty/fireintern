@@ -119,6 +119,7 @@ class CoinData(BaseModel):
     ai_keywords: list[str] = Field(default_factory=list)
     narrative_keywords: list[str] = Field(default_factory=list)
     narrative_strength: float = 0.0
+    vamp_similarity: float = 0.0  # 0-1, how similar to another token's narrative
 
     # Safety
     safety: SafetyInfo = Field(default_factory=SafetyInfo)

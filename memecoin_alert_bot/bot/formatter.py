@@ -87,7 +87,10 @@ def should_send_alert(alert: Alert, mode: str = "all", min_confidence: float = 0
     """Filter alert by subscription mode and confidence."""
     if alert.score.confidence < min_confidence:
         return False
+    # EXTREME risk tokens are auto-PASS; still allow if confidence is high enough.
     if mode == "high":
         return alert.score.verdict.value == "BUY" or alert.score.confidence >= 0.7
-    # Even PASS alerts are suppressed unless they are risk warnings; risk overrides already happen in scoring.
+    # Suppress PASS verdicts unless actual risk signals are present.
+    if alert.score.verdict.value == "PASS" and not alert.signals:
+        return False
     return True

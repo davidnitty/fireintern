@@ -115,6 +115,16 @@ class BotApp:
         try:
             coin = normalizer.create_from_pumpportal(event)
             coin = await self._enrich_solana_coin(coin)
+
+            # Apply trade-tracker buy-pressure (Solana)
+            trades = self._solana_trades.get(mint)
+            if trades:
+                total = trades.get("buy", 0) + trades.get("sell", 0)
+                if total > 0:
+                    coin.buy_pressure = trades.get("buy", 0) / total
+                    # Estimate volume from trade count (rough)
+                    if coin.volume_24h is None:
+                        coin.volume_24h = total * 50  # ~$50 avg trade
             await self._evaluate_and_alert(coin)
         except Exception:
             logger.exception("Failed to process Solana token %s", mint)
@@ -129,6 +139,23 @@ class BotApp:
     async def _evaluate_and_alert(self, coin: CoinData) -> None:
         """Run detectors, score, and optionally send a Telegram alert."""
         mint = coin.mint
+
+        # ── Market-cap filter ──
+        if coin.market_cap is not None and coin.market_cap < self.settings.min_market_cap:
+            logger.debug(
+                "Skipping %s — MC $%.0f < min $%.0f",
+                mint, coin.market_cap, self.settings.min_market_cap,
+            )
+            return
+
+        # ── Buying-activity filter ──
+        if (
+            (coin.volume_24h is None or coin.volume_24h <= 0)
+            and (coin.buy_volume_1h is None or coin.buy_volume_1h <= 0)
+        ):
+            logger.debug("Skipping %s — no buying activity detected", mint)
+            return
+
         await self.storage.upsert_coin(coin)
 
         signals = detectors.run_all(coin)
@@ -164,8 +191,20 @@ class BotApp:
         await self.telegram.setup()
         telegram_task = asyncio.create_task(self.telegram.start())
 
-        # PumpPortal listener setup
-        pumpportal = PumpPortalClient(token_handler=self._handle_new_token)
+        # PumpPortal listener setup (tokens + trades for Solana buying pressure)
+        self._solana_trades: dict[str, dict[str, int]] = {}
+
+        async def _handle_solana_trade(data: dict[str, Any]) -> None:
+            mint = data.get("mint") or data.get("token")
+            tx_type = data.get("txType", "")
+            if mint and tx_type in ("buy", "sell"):
+                tracker = self._solana_trades.setdefault(mint, {"buy": 0, "sell": 0})
+                tracker[tx_type] = tracker.get(tx_type, 0) + 1
+
+        pumpportal = PumpPortalClient(
+            token_handler=self._handle_new_token,
+            trade_handler=_handle_solana_trade,
+        )
 
         # Robinhood Chain / Pons + Noxa launchpad indexer setup
         robinhood_tasks: list[asyncio.Task] = []

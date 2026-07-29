@@ -249,3 +249,61 @@ class RobinhoodChainClient:
         except Exception as exc:
             logger.debug("Pool price decode error: %s", exc)
             return {"price": None, "liquidity": None}
+
+    async def fetch_recent_swaps(
+        self,
+        pool: str,
+        token: str,
+        pair_token: str | None = None,
+        blocks_back: int = 10_000,
+    ) -> dict[str, Any]:
+        """Query recent Uniswap V3 Swap events to compute buy/sell volume and pressure.
+
+        Returns a dict with buy_volume, sell_volume, buy_pressure (0-1),
+        and total volume in pair-token terms.
+        """
+        if not pool:
+            return {"buy_volume": 0.0, "sell_volume": 0.0, "buy_pressure": 0.5, "volume": 0.0}
+
+        pool = to_checksum_address(pool)
+        try:
+            latest = int((await self._rpc("eth_blockNumber", [])) or "0x0", 16)
+        except Exception:
+            return {"buy_volume": 0.0, "sell_volume": 0.0, "buy_pressure": 0.5, "volume": 0.0}
+
+        from_block = max(0, latest - blocks_back)
+        pair = to_checksum_address(pair_token) if pair_token else to_checksum_address(WETH)
+        is_token0 = token.lower() < pair.lower()
+
+        logs = await self.get_logs(from_block, latest, [pool], [[SWAP_TOPIC0]])
+        buy_vol = 0.0
+        sell_vol = 0.0
+        for log in logs:
+            try:
+                raw = bytes.fromhex(log.get("data", "0x").replace("0x", ""))
+                amount0, amount1 = eth_abi_decode(["int256", "int256"], raw[:64])
+                amount0_int = int(amount0)
+                amount1_int = int(amount1)
+            except Exception:
+                continue
+
+            if is_token0:
+                # Negative amount0 = token sold (withdrawn from pool), positive = token bought
+                # But this is simplified; use amount1 as the counter-party direction
+                token_signed = amount0_int
+                pair_signed = amount1_int
+            else:
+                token_signed = amount1_int
+                pair_signed = amount0_int
+
+            # token_signed < 0 means pool received tokens (user sold);
+            # token_signed > 0 means pool sent tokens (user bought).
+            swap_size = abs(pair_signed) / 1e18  # pair-token decimals
+            if token_signed < 0:
+                sell_vol += swap_size
+            else:
+                buy_vol += swap_size
+
+        total_vol = buy_vol + sell_vol
+        pressure = buy_vol / total_vol if total_vol > 0 else 0.5
+        return {"buy_volume": buy_vol, "sell_volume": sell_vol, "buy_pressure": pressure, "volume": total_vol}

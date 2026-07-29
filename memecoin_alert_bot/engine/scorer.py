@@ -21,6 +21,7 @@ WEIGHTS = {
     "market_conditions": 0.10,
     "holders": 0.10,
     "chart_structure": 0.10,
+    "buying_pressure": 0.05,
 }
 
 
@@ -159,6 +160,22 @@ def score_chart_structure(coin: CoinData) -> float:
     return 0.5
 
 
+def score_buying_pressure(coin: CoinData) -> float:
+    """Score buying pressure from swap event analysis (0 = all sells, 1 = all buys)."""
+    bp = coin.buy_pressure
+    if bp is None:
+        return 0.5  # unknown
+    if bp > 0.8:
+        return 0.9
+    if bp > 0.6:
+        return 0.7
+    if bp > 0.4:
+        return 0.5
+    if bp > 0.2:
+        return 0.3
+    return 0.1
+
+
 def determine_risk(coin: CoinData, bundling_score: float, signals: list[Signal]) -> RiskLevel:
     """Determine overall risk level."""
     if bundling_score >= 0.8 or coin.safety.is_honeypot:
@@ -185,6 +202,7 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
     m = score_market_conditions(coin)
     h = score_holders(coin)
     c = score_chart_structure(coin)
+    p = score_buying_pressure(coin)
 
     composite = (
         b * WEIGHTS["bundling"]
@@ -194,6 +212,7 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
         + m * WEIGHTS["market_conditions"]
         + h * WEIGHTS["holders"]
         + c * WEIGHTS["chart_structure"]
+        + p * WEIGHTS["buying_pressure"]
     )
 
     risk = determine_risk(coin, b, signals)
@@ -209,6 +228,7 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
         f"Market {m:.2f} × {WEIGHTS['market_conditions']}",
         f"Holders {h:.2f} × {WEIGHTS['holders']}",
         f"Chart {c:.2f} × {WEIGHTS['chart_structure']}",
+        f"Buy pressure {p:.2f} × {WEIGHTS['buying_pressure']}",
     ]
 
     # Risk override: EXTREME -> PASS regardless of score.
@@ -243,6 +263,7 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
             market_conditions=round(m, 3),
             holders=round(h, 3),
             chart_structure=round(c, 3),
+            buying_pressure=round(p, 3),
         ),
         explanation=explanation,
     )

@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # Bot behavior
     alert_cooldown_seconds: int = Field(default=300, alias="ALERT_COOLDOWN_SECONDS")
     min_confidence: float = Field(default=0.2, alias="MIN_CONFIDENCE")
+    min_market_cap: float = Field(default=5000, alias="MIN_MARKET_CAP")
+    min_volume_24h: float = Field(default=0, alias="MIN_VOLUME_24H")
     subscription_mode: str = Field(default="all", alias="SUBSCRIPTION_MODE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 

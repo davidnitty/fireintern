@@ -92,6 +92,8 @@ class NoxaIndexer:
 
         price_info = await self.client.fetch_pool_price(pool_addr, token, WETH)
 
+        swap_info = await self.client.fetch_recent_swaps(pool_addr, token, WETH)
+
         coin = CoinData(
             mint=token,
             chain="robinhood",
@@ -101,6 +103,10 @@ class NoxaIndexer:
             description=token_meta.get("description", ""),
             dev_wallet="",
             price=price_info.get("price"),
+            volume_24h=swap_info.get("volume", 0.0),
+            buy_volume_1h=swap_info.get("buy_volume", 0.0),
+            sell_volume_1h=swap_info.get("sell_volume", 0.0),
+            buy_pressure=swap_info.get("buy_pressure", 0.5),
             pool_address=pool_addr,
             pair_token=WETH,
             social_links=socials,

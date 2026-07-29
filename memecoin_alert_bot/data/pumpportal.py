@@ -104,10 +104,16 @@ class PumpPortalClient:
                 logger.warning("PumpPortal error: %s", exc)
             await asyncio.sleep(5)
 
-    def start(self) -> asyncio.Task:
+    def start(self, subscribe_trades: bool | None = None) -> asyncio.Task:
         """Start the WebSocket listener as a background task."""
         self._stop_event.clear()
-        self._task = asyncio.create_task(self.connect())
+        if subscribe_trades is None:
+            # Auto-detect: subscribe if trade_handler was explicitly provided
+            subscribe_trades = (
+                self.trade_handler is not None
+                and self.trade_handler != self._default_trade_handler
+            )
+        self._task = asyncio.create_task(self.connect(subscribe_trades))
         return self._task
 
     async def stop(self) -> None:

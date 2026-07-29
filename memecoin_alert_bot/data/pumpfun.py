@@ -76,6 +76,7 @@ class PumpFunClient:
         result["liquidity"] = float(data.get("liquidity", 0) or 0)
         result["price"] = float(data.get("price", 0) or 0)
         result["holders"] = int(data.get("holder_count", 0) or 0)
+        result["volume_24h"] = float(data.get("volume_24h", 0) or 0)
 
         created = data.get("created_timestamp")
         if created:

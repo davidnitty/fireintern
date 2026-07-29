@@ -87,6 +87,9 @@ class CoinData(BaseModel):
     # Market
     market_cap: float | None = None
     volume_24h: float | None = None
+    buy_volume_1h: float | None = None
+    sell_volume_1h: float | None = None
+    buy_pressure: float | None = None
     liquidity: float | None = None
     price: float | None = None
     price_sol: float | None = None
@@ -206,6 +209,7 @@ class ScoreBreakdown(BaseModel):
     market_conditions: float = 0.0
     holders: float = 0.0
     chart_structure: float = 0.0
+    buying_pressure: float = 0.0
 
 
 class ScoreResult(BaseModel):

@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS backtest_snapshots (
     score REAL,
     payload TEXT
 );
+
+CREATE TABLE IF NOT EXISTS chain_state (
+    chain TEXT PRIMARY KEY,
+    last_block INTEGER,
+    updated_at TEXT
+);
 """
 
 
@@ -175,6 +181,29 @@ class Storage:
                     }
                 ),
             ),
+        )
+        await self._connection.commit()
+
+    async def get_chain_state(self, chain: str) -> dict[str, Any] | None:
+        """Fetch persisted chain scanner state."""
+        async with self._connection.execute(
+            "SELECT * FROM chain_state WHERE chain = ?", (chain,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def set_chain_state(self, chain: str, last_block: int) -> None:
+        """Persist the last scanned block for a chain."""
+        now = datetime.now(timezone.utc).isoformat()
+        await self._connection.execute(
+            """
+            INSERT INTO chain_state (chain, last_block, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(chain) DO UPDATE SET
+                last_block = excluded.last_block,
+                updated_at = excluded.updated_at
+            """,
+            (chain, last_block, now),
         )
         await self._connection.commit()
 

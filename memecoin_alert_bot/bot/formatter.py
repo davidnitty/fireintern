@@ -73,7 +73,7 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
 
     keyboard = [
         [
-            InlineKeyboardButton("🚀 Buy on pump.fun", url=coin.pump_fun_url),
+            InlineKeyboardButton("🚀 Buy", url=coin.buy_url),
             InlineKeyboardButton("📊 Chart", url=coin.dexscreener_url),
         ]
     ]

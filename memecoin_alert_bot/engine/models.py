@@ -78,6 +78,8 @@ class CoinData(BaseModel):
 
     # Identity
     mint: str
+    chain: str = "solana"
+    chain_id: int | None = None
     symbol: str = "UNKNOWN"
     name: str = ""
     description: str = ""
@@ -98,11 +100,16 @@ class CoinData(BaseModel):
 
     # Dev / team
     dev_wallet: str = ""
+    deployer: str | None = None
     dev_sol_balance: float | None = None
     social_links: dict[str, str] = Field(default_factory=dict)
     website: str | None = None
     twitter: str | None = None
     telegram: str | None = None
+
+    # EVM / pool specifics
+    pool_address: str | None = None
+    pair_token: str | None = None
 
     # Agent / narrative
     tokenized_agent: bool = False
@@ -141,7 +148,17 @@ class CoinData(BaseModel):
 
     @property
     def dexscreener_url(self) -> str:
-        return f"https://dexscreener.com/solana/{self.mint}"
+        chain_slug = "solana" if self.chain == "solana" else self.chain
+        return f"https://dexscreener.com/{chain_slug}/{self.mint}"
+
+    @property
+    def buy_url(self) -> str:
+        """Return the best buy link for the coin's chain."""
+        if self.chain == "solana":
+            return self.pump_fun_url
+        if self.pool_address:
+            return f"https://dexscreener.com/{self.chain}/{self.pool_address}"
+        return self.dexscreener_url
 
 
 class Signal(BaseModel):

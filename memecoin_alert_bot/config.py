@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     enable_rugcheck: bool = Field(default=True, alias="ENABLE_RUGCHECK")
     enable_solscan: bool = Field(default=True, alias="ENABLE_SOLSCAN")
 
+    # Robinhood Chain (Arbitrum Orbit L2)
+    enable_pons_robinhood: bool = Field(default=True, alias="ENABLE_PONS_ROBINHOOD")
+    robinhood_rpc_url: str = Field(
+        default="https://rpc.mainnet.chain.robinhood.com",
+        alias="ROBINHOOD_RPC_URL",
+    )
+
 
 _settings: Settings | None = None
 

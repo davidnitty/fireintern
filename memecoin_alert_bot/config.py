@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     x_bearer_token: str = Field(default="", alias="X_BEARER_TOKEN")
     codex_api_key: str = Field(default="", alias="CODEX_API_KEY")
     bitquery_api_key: str = Field(default="", alias="BITQUERY_API_KEY")
+    bubblemaps_api_key: str = Field(default="", alias="BUBBLEMAPS_API_KEY")
 
     # Bot behavior
     alert_cooldown_seconds: int = Field(default=300, alias="ALERT_COOLDOWN_SECONDS")

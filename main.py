@@ -12,6 +12,8 @@ import aiohttp
 
 from memecoin_alert_bot.bot.telegram import TelegramBot
 from memecoin_alert_bot.config import get_settings
+from memecoin_alert_bot.data.bitquery import BitqueryClient
+from memecoin_alert_bot.data.bubblemaps import BubblemapsClient
 from memecoin_alert_bot.data.dexscreener import DexScreenerClient
 from memecoin_alert_bot.data.noxa import NoxaIndexer
 from memecoin_alert_bot.data.pons import PonsIndexer
@@ -52,6 +54,8 @@ class BotApp:
         self.solscan = SolscanClient(self.settings.solscan_api_key, self.session)
         self.x_api = XApiClient(self.settings.x_bearer_token, self.session)
         self.robinhood = RobinhoodChainClient(self.settings.robinhood_rpc_url, self.session)
+        self.bubblemaps = BubblemapsClient(self.settings.bubblemaps_api_key, self.session)
+        self.bitquery = BitqueryClient(self.settings.bitquery_api_key, self.session)
         self._clients = [
             self.pumpfun,
             self.dexscreener,
@@ -59,6 +63,8 @@ class BotApp:
             self.solscan,
             self.x_api,
             self.robinhood,
+            self.bubblemaps,
+            self.bitquery,
         ]
 
     async def _close_clients(self) -> None:
@@ -76,18 +82,39 @@ class BotApp:
         async with self._solana_semaphore:
             mint = coin.mint
 
+            # Bitquery: primary data source for volume, price, buy pressure
             tasks = []
+            bitquery_task = None
+            if self.settings.bitquery_api_key:
+                bitquery_task = asyncio.create_task(self.bitquery.enrich_coin(mint))
+                tasks.append(bitquery_task)
+
+            # DexScreener and pump.fun as fallbacks (always run alongside)
             if self.settings.enable_pumpfun_rest:
                 tasks.append(self.pumpfun.enrich_coin(mint, {}))
             if self.settings.enable_dexscreener:
                 tasks.append(self.dexscreener.enrich_coin(mint, {}))
-            if self.settings.enable_rugcheck:
+
+            # Safety / cluster
+            if self.settings.rugcheck_api_key:
                 tasks.append(self.rugcheck.enrich_coin(mint, {}))
-            if self.settings.enable_solscan:
+            if self.settings.solscan_api_key:
                 tasks.append(self.solscan.enrich_coin(mint, {}))
+            if self.settings.bubblemaps_api_key:
+                tasks.append(self.bubblemaps.enrich_coin(mint))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
+
+            # Apply Bitquery result first (it's the most reliable)
+            if bitquery_task:
+                bq_result = results[0]
+                if not isinstance(bq_result, Exception) and isinstance(bq_result, dict):
+                    coin = normalizer.merge_enrichment(coin, bq_result)
+                off = 1
+            else:
+                off = 0
+
+            for result in results[off:]:
                 if isinstance(result, Exception):
                     logger.debug("Enrichment error for %s: %s", mint, result)
                     continue
@@ -98,7 +125,6 @@ class BotApp:
             try:
                 x_result = await self.x_api.narrative_mentions(coin.symbol, coin.name)
                 coin.sources["x_api"] = x_result.get("sources", {}).get("x_api")
-                # If API returned engagement, bump narrative strength slightly.
                 if x_result.get("count", 0) > 0:
                     coin.narrative_strength = min(1.0, coin.narrative_strength + 0.2)
             except Exception:

@@ -13,6 +13,7 @@ import aiohttp
 from memecoin_alert_bot.bot.telegram import TelegramBot
 from memecoin_alert_bot.config import get_settings
 from memecoin_alert_bot.data.dexscreener import DexScreenerClient
+from memecoin_alert_bot.data.noxa import NoxaIndexer
 from memecoin_alert_bot.data.pons import PonsIndexer
 from memecoin_alert_bot.data.pumpfun import PumpFunClient
 from memecoin_alert_bot.data.pumpportal import PumpPortalClient
@@ -41,6 +42,7 @@ class BotApp:
         self._shutdown_event = asyncio.Event()
         self._solana_semaphore = asyncio.Semaphore(5)  # limit concurrent enrichment
         self._pons_indexer: PonsIndexer | None = None
+        self._noxa_indexer: NoxaIndexer | None = None
 
     async def _init_clients(self) -> None:
         self.session = aiohttp.ClientSession()
@@ -118,7 +120,7 @@ class BotApp:
             logger.exception("Failed to process Solana token %s", mint)
 
     async def _handle_robinhood_token(self, coin: CoinData) -> None:
-        """Process a Robinhood Chain token discovered by the Pons indexer."""
+        """Process a Robinhood Chain token discovered by Pons or Noxa indexers."""
         try:
             await self._evaluate_and_alert(coin)
         except Exception:
@@ -165,8 +167,8 @@ class BotApp:
         # PumpPortal listener setup
         pumpportal = PumpPortalClient(token_handler=self._handle_new_token)
 
-        # Robinhood Chain / Pons launchpad indexer setup
-        pons_tasks = []
+        # Robinhood Chain / Pons + Noxa launchpad indexer setup
+        robinhood_tasks: list[asyncio.Task] = []
         if self.settings.enable_pons_robinhood:
             state = await self.storage.get_chain_state("robinhood")
             start_block = state["last_block"] if state else None
@@ -177,11 +179,29 @@ class BotApp:
             self._pons_indexer = PonsIndexer(
                 self.robinhood, token_handler=self._handle_robinhood_token
             )
-            pons_task = self._pons_indexer.start(
-                start_block=start_block,
-                save_last_block=save_last_block,
+            robinhood_tasks.append(
+                self._pons_indexer.start(
+                    start_block=start_block,
+                    save_last_block=save_last_block,
+                )
             )
-            pons_tasks.append(pons_task)
+
+        if self.settings.enable_noxa_robinhood:
+            noxa_state = await self.storage.get_chain_state("noxa")
+            noxa_start_count = noxa_state["last_block"] if noxa_state else 0
+
+            async def save_noxa_count(count: int) -> None:
+                await self.storage.set_chain_state("noxa", count)
+
+            self._noxa_indexer = NoxaIndexer(
+                self.robinhood, token_handler=self._handle_robinhood_token
+            )
+            robinhood_tasks.append(
+                self._noxa_indexer.start(
+                    get_last_count=lambda: noxa_start_count,
+                    save_last_count=save_noxa_count,
+                )
+            )
 
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -200,8 +220,10 @@ class BotApp:
             await pumpportal.stop()
             if self._pons_indexer:
                 await self._pons_indexer.stop()
+            if self._noxa_indexer:
+                await self._noxa_indexer.stop()
             telegram_task.cancel()
-            for t in pons_tasks:
+            for t in robinhood_tasks:
                 t.cancel()
                 try:
                     await t

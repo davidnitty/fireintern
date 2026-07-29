@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -49,7 +50,7 @@ class PonsIndexer:
         if self.token_handler is None:
             return
         try:
-            if asyncio.iscoroutinefunction(self.token_handler):
+            if inspect.iscoroutinefunction(self.token_handler):
                 await self.token_handler(coin)
             else:
                 self.token_handler(coin)

@@ -22,7 +22,9 @@ A Telegram bot that monitors [pump.fun](https://pump.fun) in real time and sends
   - Rugcheck (safety report)
   - Solscan Pro API (holders/metadata)
   - X API v2 stub (narrative/viral detection when key provided)
-  - Robinhood Chain L2 (Arbitrum Orbit, Chain ID 4663) — on-chain `TokenLaunched` events from Pons launchpad
+  - Robinhood Chain L2 (Arbitrum Orbit, Chain ID 4663):
+    - Pons launchpad (`TokenLaunched` events)
+    - Noxa launchpad (polls on-chain `allTokensLength()` / `allTokens(index)` registry)
 - **Telegram Delivery**
   - Rich Markdown alert cards with inline buttons.
   - Per-coin cooldown to avoid spam.
@@ -82,6 +84,7 @@ python -m memecoin_alert_bot
 | `SUBSCRIPTION_MODE` | No | `all` or `high` (default `all`). |
 | `MIN_CONFIDENCE` | No | Minimum confidence to send alert (default `0.2`). |
 | `ENABLE_PONS_ROBINHOOD` | No | Enable Robinhood Chain Pons indexer (default `true`). |
+| `ENABLE_NOXA_ROBINHOOD` | No | Enable Robinhood Chain Noxa indexer (default `true`). |
 | `ROBINHOOD_RPC_URL` | No | JSON-RPC endpoint for Robinhood Chain (default public RPC). |
 
 ## Architecture
@@ -93,7 +96,7 @@ DexScreener    ──┤  ├─> CoinData Normalizer ──> 7 Detectors ──
 Rugcheck       ──┤  │                                   |
 Solscan        ──┘  │                                   v
                     │                           SQLite Storage
-Robinhood Chain ────┘  (Pons TokenLaunched events via RPC)
+Robinhood Chain ────┘  (Pons events + Noxa registry via RPC)
 ```
 
 ## Testing
@@ -106,7 +109,7 @@ pytest
 ## Roadmap
 
 - [x] Robinhood Chain + Pons launchpad integration
-- [ ] Noxa (`fun.noxa.fi/rh`) launchpad integration (factory address needed)
+- [x] Noxa (`fun.noxa.fi/rh`) launchpad integration
 - [ ] Codex / Bitquery integration as stable primary data source
 - [ ] Bubblemaps bundle cluster analysis
 - [ ] NLP-driven narrative detection

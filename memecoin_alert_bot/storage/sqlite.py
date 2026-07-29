@@ -176,8 +176,8 @@ class Storage:
                 score.composite_score,
                 json.dumps(
                     {
-                        "coin": coin.model_dump(),
-                        "score": score.model_dump(),
+                        "coin": coin.model_dump(mode="json"),
+                        "score": score.model_dump(mode="json"),
                     }
                 ),
             ),

@@ -176,10 +176,19 @@ class BotApp:
             return
 
         # ── Buying-activity filter ──
-        if (
-            (coin.volume_24h is None or coin.volume_24h <= 0)
-            and (coin.buy_volume_1h is None or coin.buy_volume_1h <= 0)
-        ):
+        # Allow through if: (a) there is swap volume, OR (b) the token is very
+        # fresh (< 1 min old) and already has a pool — trades may not have
+        # been indexed yet, but market cap and pool existence signal activity.
+        has_volume = (
+            (coin.volume_24h is not None and coin.volume_24h > 0)
+            or (coin.buy_volume_1h is not None and coin.buy_volume_1h > 0)
+        )
+        is_fresh_with_pool = (
+            coin.age_seconds is not None
+            and coin.age_seconds < 120
+            and coin.pool_address is not None
+        )
+        if not has_volume and not is_fresh_with_pool:
             logger.debug("Skipping %s — no buying activity detected", mint)
             return
 

@@ -13,7 +13,7 @@ from typing import Any
 
 import aiohttp
 
-from memecoin_alert_bot.utils.helpers import fetch_json
+from memecoin_alert_bot.utils.helpers import fetch_json, is_valid_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class BubblemapsClient:
         api_key: str = "",
         session: aiohttp.ClientSession | None = None,
     ):
-        self.api_key = api_key
+        self.api_key = api_key if is_valid_api_key(api_key) else ""
         headers: dict[str, str] = {"Accept": "application/json"}
         if api_key:
             headers["x-api-key"] = api_key

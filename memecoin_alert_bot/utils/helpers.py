@@ -78,3 +78,11 @@ def setup_logging(level: str = "INFO") -> None:
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     )
+
+
+def is_valid_api_key(key: str) -> bool:
+    """Return False for empty or placeholder API keys."""
+    if not key or not key.strip():
+        return False
+    placeholder_prefixes = ("your_", "replace_", "changeme", "TODO", "xxx")
+    return not key.strip().lower().startswith(placeholder_prefixes)

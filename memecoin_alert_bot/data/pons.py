@@ -115,6 +115,7 @@ class PonsIndexer:
             buy_volume_1h=swap_info.get("buy_volume", 0.0),
             sell_volume_1h=swap_info.get("sell_volume", 0.0),
             buy_pressure=swap_info.get("buy_pressure", 0.5),
+            age_seconds=0,
             pool_address=pool_addr,
             pair_token=pair_addr,
             social_links=socials,

@@ -46,6 +46,7 @@ class BotApp:
         self._solana_semaphore = asyncio.Semaphore(5)  # limit concurrent enrichment
         self._pons_indexer: PonsIndexer | None = None
         self._noxa_indexer: NoxaIndexer | None = None
+        self._symbol_cooldowns: dict[str, float] = {}  # symbol -> last alert timestamp
 
     async def _init_clients(self) -> None:
         self.session = aiohttp.ClientSession()
@@ -175,30 +176,39 @@ class BotApp:
             )
             return
 
-        # ── Buying-activity filter ──
-        # Allow through if: (a) there is swap volume, OR (b) the token is very
-        # fresh (< 1 min old) and already has a pool — trades may not have
-        # been indexed yet, but market cap and pool existence signal activity.
-        has_volume = (
-            (coin.volume_24h is not None and coin.volume_24h > 0)
-            or (coin.buy_volume_1h is not None and coin.buy_volume_1h > 0)
-        )
-        is_fresh_with_pool = (
-            coin.age_seconds is not None
-            and coin.age_seconds < 120
-            and coin.pool_address is not None
-        )
-        if not has_volume and not is_fresh_with_pool:
-            logger.debug("Skipping %s — no buying activity detected", mint)
-            return
-
-        # ── NLP narrative analysis ──
+        # ── NLP narrative analysis (must run before buying-activity check) ──
         narrative_text = f"{coin.name} {coin.description}"
         na = get_narrative_analyzer()
         coin.narrative_keywords = na.extract_keywords(narrative_text)[:10]
         coin.narrative_strength = na.narrative_strength(narrative_text)
         coin.vamp_similarity = na.check_vamp_risk(narrative_text)
         na.add_token(coin.mint, narrative_text)
+
+        # ── Buying-activity filter ──
+        # Allow through if: (a) there is swap volume, OR (b) the token is very
+        # fresh (< 60 s old), already has a pool, AND has a meaningful narrative.
+        has_volume = (
+            (coin.volume_24h is not None and coin.volume_24h > 0)
+            or (coin.buy_volume_1h is not None and coin.buy_volume_1h > 0)
+        )
+        is_fresh_with_narrative = (
+            coin.age_seconds is not None
+            and coin.age_seconds < 60
+            and coin.pool_address is not None
+            and coin.narrative_keywords
+        )
+        if not has_volume and not is_fresh_with_narrative:
+            logger.debug("Skipping %s — no buying activity detected", mint)
+            return
+
+        # ── Per-symbol cooldown (catch name copycats) ──
+        import time
+        now = time.time()
+        last = self._symbol_cooldowns.get(coin.symbol)
+        if last and (now - last) < 60:
+            logger.debug("Skipping %s — symbol %s on cooldown", mint, coin.symbol)
+            return
+        self._symbol_cooldowns[coin.symbol] = now
 
         await self.storage.upsert_coin(coin)
 

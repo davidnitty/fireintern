@@ -20,6 +20,15 @@ DEFAULT_RPC = "https://rpc.mainnet.chain.robinhood.com"
 CHAIN_ID = 4663
 WETH = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73"
 SWAP_TOPIC0 = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbca67"
+ETH_USD = 3500.0  # rough ETH/USD oracle for market-cap estimates
+BLOCK_TIME_SECONDS = 0.25  # Robinhood is an Arbitrum Orbit chain
+
+
+def estimate_market_cap(price_in_pair: float | None, total_supply: float | None, eth_usd: float = ETH_USD) -> float | None:
+    """Estimate USD market cap from token price (in WETH) and total supply."""
+    if price_in_pair is None or total_supply is None or price_in_pair <= 0 or total_supply <= 0:
+        return None
+    return price_in_pair * total_supply * eth_usd
 
 # Minimal ABI fragments used for eth_call.
 FUNCTION_SELECTORS = {

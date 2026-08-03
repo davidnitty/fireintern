@@ -22,6 +22,7 @@ from memecoin_alert_bot.data.robinhood import (
     CHAIN_ID as ROBINHOOD_CHAIN_ID,
     WETH,
     RobinhoodChainClient,
+    estimate_market_cap,
 )
 from memecoin_alert_bot.engine.models import CoinData, SafetyInfo
 
@@ -94,6 +95,9 @@ class NoxaIndexer:
 
         swap_info = await self.client.fetch_recent_swaps(pool_addr, token, WETH)
 
+        price_in_pair = price_info.get("price")
+        market_cap = estimate_market_cap(price_in_pair, token_meta.get("total_supply"))
+
         coin = CoinData(
             mint=token,
             chain="robinhood",
@@ -102,12 +106,13 @@ class NoxaIndexer:
             name=token_meta.get("name", ""),
             description=token_meta.get("description", ""),
             dev_wallet="",
-            price=price_info.get("price"),
+            price=price_in_pair,
+            market_cap=market_cap,
             volume_24h=swap_info.get("volume", 0.0),
             buy_volume_1h=swap_info.get("buy_volume", 0.0),
             sell_volume_1h=swap_info.get("sell_volume", 0.0),
             buy_pressure=swap_info.get("buy_pressure", 0.5),
-            age_seconds=0,
+            age_seconds=None,
             pool_address=pool_addr,
             pair_token=WETH,
             social_links=socials,

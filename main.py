@@ -168,8 +168,11 @@ class BotApp:
         """Run detectors, score, and optionally send a Telegram alert."""
         mint = coin.mint
 
-        # ── Market-cap filter ──
-        if coin.market_cap is not None and coin.market_cap < self.settings.min_market_cap:
+        # ── Market-cap filter (strict) ──
+        if coin.market_cap is None:
+            logger.debug("Skipping %s — no market cap data", mint)
+            return
+        if coin.market_cap < self.settings.min_market_cap:
             logger.debug(
                 "Skipping %s — MC $%.0f < min $%.0f",
                 mint, coin.market_cap, self.settings.min_market_cap,
@@ -184,20 +187,12 @@ class BotApp:
         coin.vamp_similarity = na.check_vamp_risk(narrative_text)
         na.add_token(coin.mint, narrative_text)
 
-        # ── Buying-activity filter ──
-        # Allow through if: (a) there is swap volume, OR (b) the token is very
-        # fresh (< 60 s old), already has a pool, AND has a meaningful narrative.
+        # ── Buying-activity filter (strict — ONLY coins people are buying) ──
         has_volume = (
             (coin.volume_24h is not None and coin.volume_24h > 0)
             or (coin.buy_volume_1h is not None and coin.buy_volume_1h > 0)
         )
-        is_fresh_with_narrative = (
-            coin.age_seconds is not None
-            and coin.age_seconds < 60
-            and coin.pool_address is not None
-            and coin.narrative_keywords
-        )
-        if not has_volume and not is_fresh_with_narrative:
+        if not has_volume:
             logger.debug("Skipping %s — no buying activity detected", mint)
             return
 

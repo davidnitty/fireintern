@@ -12,9 +12,11 @@ from eth_abi import decode as eth_abi_decode
 from eth_utils import to_checksum_address
 
 from memecoin_alert_bot.data.robinhood import (
+    BLOCK_TIME_SECONDS,
     CHAIN_ID as ROBINHOOD_CHAIN_ID,
     WETH,
     RobinhoodChainClient,
+    estimate_market_cap,
 )
 from memecoin_alert_bot.engine.models import CoinData, SafetyInfo
 
@@ -101,6 +103,20 @@ class PonsIndexer:
 
         swap_info = await self.client.fetch_recent_swaps(pool_addr, token, pair_addr)
 
+        # Real coin age from launch block (0.25s block time on Arbitrum Orbit).
+        launch_block = int(log.get("blockNumber", "0x0") or "0x0", 16)
+        price_in_pair = price_info.get("price")
+        market_cap = estimate_market_cap(price_in_pair, token_meta.get("total_supply"))
+
+        age_seconds = None
+        if launch_block > 0:
+            try:
+                latest = await self.client.get_block_number()
+                age_seconds = max(0, (latest - launch_block)) * BLOCK_TIME_SECONDS
+                age_seconds = int(age_seconds)
+            except Exception:
+                pass
+
         coin = CoinData(
             mint=token,
             chain="robinhood",
@@ -110,12 +126,13 @@ class PonsIndexer:
             description=token_meta.get("description", ""),
             deployer=deployer,
             dev_wallet=deployer,
-            price=price_info.get("price"),
+            price=price_in_pair,
+            market_cap=market_cap,
             volume_24h=swap_info.get("volume", 0.0),
             buy_volume_1h=swap_info.get("buy_volume", 0.0),
             sell_volume_1h=swap_info.get("sell_volume", 0.0),
             buy_pressure=swap_info.get("buy_pressure", 0.5),
-            age_seconds=0,
+            age_seconds=age_seconds,
             pool_address=pool_addr,
             pair_token=pair_addr,
             social_links=socials,

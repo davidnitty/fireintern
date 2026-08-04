@@ -20,25 +20,37 @@ async def fetch_json(
     headers: dict[str, str] | None = None,
     payload: dict[str, Any] | None = None,
     timeout: int = 20,
+    retries: int = 1,
+    retry_delay: float = 1.0,
 ) -> dict[str, Any] | None:
-    """Fetch JSON from an HTTP endpoint with error handling."""
-    try:
-        async with session.request(
-            method,
-            url,
-            headers=headers,
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=timeout),
-        ) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                logger.debug("Non-200 response from %s: %s %s", url, resp.status, text[:200])
-                return None
-            return await resp.json()
-    except asyncio.TimeoutError:
-        logger.warning("Timeout fetching %s", url)
-    except Exception as exc:
-        logger.warning("Error fetching %s: %s", url, exc)
+    """Fetch JSON from an HTTP endpoint with error handling and retries.
+
+    Intermediate failures are logged at DEBUG; only a total failure after
+    all retries is logged at WARNING.
+    """
+    last_error: Exception | None = None
+    for attempt in range(max(1, retries)):
+        try:
+            async with session.request(
+                method,
+                url,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    logger.debug("Non-200 response from %s: %s %s", url, resp.status, text[:200])
+                    return None
+                return await resp.json()
+        except asyncio.TimeoutError:
+            last_error = TimeoutError(f"Timeout fetching {url}")
+        except Exception as exc:
+            last_error = exc
+        logger.debug("Request to %s failed (attempt %d/%d): %s", url, attempt + 1, retries, last_error)
+        if attempt < max(1, retries) - 1:
+            await asyncio.sleep(retry_delay * (attempt + 1))
+    logger.warning("Error fetching %s: %s", url, last_error)
     return None
 
 

@@ -83,6 +83,7 @@ class RobinhoodChainClient:
                 method="POST",
                 payload=payload,
                 timeout=25,
+                retries=3,
             )
             if data is None:
                 return None
@@ -130,7 +131,7 @@ class RobinhoodChainClient:
         ]
         async with self._call_pace:
             data = await fetch_json(
-                self.session, self.rpc_url, method="POST", payload=payload, timeout=30
+                self.session, self.rpc_url, method="POST", payload=payload, timeout=30, retries=3
             )
         if not isinstance(data, list):
             return []

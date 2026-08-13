@@ -39,8 +39,12 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("start", self._cmd_start))
         self.application.add_handler(CommandHandler("status", self._cmd_status))
         self.application.add_handler(CommandHandler("recent", self._cmd_recent))
+        self.application.add_handler(CommandHandler("test", self._cmd_test))
         await self.application.initialize()
         self._ready = True
+        logger.info(
+            "Telegram destinations configured: %d", len(self.settings.get_chat_ids())
+        )
         return self.application
 
     async def start(self) -> None:
@@ -100,6 +104,32 @@ class TelegramBot:
             chat_id=update.effective_chat.id,
             text="✅ Bot is running and listening to PumpPortal.",
         )
+
+    async def _cmd_test(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Send a test message to every configured destination chat."""
+        chat_ids = self.settings.get_chat_ids()
+        if update.effective_chat is not None:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f" Sending test to {len(chat_ids)} destination(s)...",
+            )
+        ok, fail = 0, 0
+        for cid in chat_ids:
+            try:
+                await context.bot.send_message(
+                    chat_id=cid,
+                    text="🧪 *Fire Intern test* — this group is configured correctly.",
+                    parse_mode="Markdown",
+                )
+                ok += 1
+            except Exception as exc:
+                fail += 1
+                logger.warning("Test send to %s failed: %s", cid, exc)
+        if update.effective_chat is not None:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"🧪 Done: {ok} delivered, {fail} failed.",
+            )
 
     async def _cmd_recent(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.effective_chat is None:

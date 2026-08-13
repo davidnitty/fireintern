@@ -184,6 +184,33 @@ class Verdict(str, Enum):
     PASS = "PASS"
 
 
+class Tier(str, Enum):
+    """Relative quality/risk tier (guide §4). Relative only — not a safety claim."""
+
+    DIAMOND = "DIAMOND"            # High Relative Quality
+    STANDARD = "STANDARD"          # Watch
+    GAMBLE = "GAMBLE"              # Speculative
+    HIGH_RISK = "HIGH_RISK"        # Reject / suppress
+
+    @property
+    def emoji(self) -> str:
+        return {
+            Tier.DIAMOND: "💎",
+            Tier.STANDARD: "🔵",
+            Tier.GAMBLE: "🎲",
+            Tier.HIGH_RISK: "",
+        }[self]
+
+    @property
+    def label(self) -> str:
+        return {
+            Tier.DIAMOND: "HIGH RELATIVE QUALITY",
+            Tier.STANDARD: "WATCH",
+            Tier.GAMBLE: "SPECULATIVE",
+            Tier.HIGH_RISK: "HIGH RISK / REJECT",
+        }[self]
+
+
 class RiskLevel(str, Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
@@ -213,13 +240,37 @@ class ScoreBreakdown(BaseModel):
     buying_pressure: float = 0.0
 
 
+class GateResult(BaseModel):
+    """Outcome of a single hard gate (guide §3.2)."""
+
+    gate: str
+    passed: bool
+    status: str = "unknown"  # passed / failed / unknown
+    detail: str = ""
+
+
 class ScoreResult(BaseModel):
-    """Final scoring result for a coin."""
+    """Final scoring result for a coin.
+
+    Follows the revised guide: separate Quality (Q), Risk (R), and Data
+    Confidence (C) rather than a single unexplained composite.
+    """
 
     composite_score: float = 0.0
     confidence: float = 0.0
     verdict: Verdict = Verdict.PASS
     risk: RiskLevel = RiskLevel.LOW
+
+    # Revised three-axis scores (0-100)
+    quality: float = 0.0
+    risk_score: float = 0.0
+    data_confidence: float = 0.0
+
+    tier: Tier = Tier.HIGH_RISK
+    gates: list[GateResult] = Field(default_factory=list)
+    gates_passed: bool = False
+    invalidation: list[str] = Field(default_factory=list)
+
     breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
     explanation: list[str] = Field(default_factory=list)
 

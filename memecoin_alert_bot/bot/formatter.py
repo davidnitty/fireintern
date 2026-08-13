@@ -105,10 +105,10 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
 
     lines: list[str] = []
 
-    # Header
+    # Header — tier + discovery signal (guide §6)
     lines.append(f"🚨 NEW Fire Intern CALL ⦿")
+    lines.append(f"{score.tier.emoji} {score.tier.label} — {alert.primary_signal}")
     lines.append(f"🔍 {coin.name} (${coin.symbol})")
-    lines.append(f"➰ {coin.name} (${coin.symbol})")
     lines.append(
         f"➰{r_emoji} 🌱{_fmt_age(coin.age_seconds)} 👀{coin.holders or 0}"
     )
@@ -140,20 +140,33 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
     lines.append(f"➰ {' • '.join(social_parts)}")
     lines.append("")
 
-    # Audit
+    # Risk / authority / venue (guide §3.3 venue-aware)
     lines.append(f"⚠️ Audit {_audit_bars(score.risk)}")
     lines.append(f"❌ LP Ratio [{_lp_ratio(coin)}]")
     mint_auth = coin.safety.mint_authority_enabled
-    mint_status = "ENABLED" if mint_auth is True else ("disabled" if mint_auth is False else "unknown")
-    lines.append(f"❌ Mint [{mint_status}]")
+    freeze_auth = coin.safety.freeze_authority_enabled
+    lines.append(f"❌ Mint Auth: {'Active' if mint_auth is True else ('Revoked' if mint_auth is False else 'Unknown')}")
+    lines.append(f"❌ Freeze Auth: {'Active' if freeze_auth is True else ('Revoked' if freeze_auth is False else 'Unknown')}")
+    venue = "DEX pool" if coin.pool_address else ("bonding curve" if coin.chain == "solana" else "unknown")
+    lines.append(f"🏛 Venue: {venue} ({coin.chain.title()})")
+    sell_route = "Verified" if (coin.pool_address or coin.chain == "solana") else "Unverified"
+    lines.append(f"💸 Sell route: {sell_route}")
     lines.append("")
 
-    # Verdict / risk / confidence
+    # Scores (Q / R / C) — separate axes, not a single score (guide §4)
+    lines.append("📈 Scores")
+    lines.append(f"➰ Quality Q: {score.quality:.0f} / 100")
+    lines.append(f"➰ Risk R: {score.risk_score:.0f} / 100")
+    lines.append(f"➰ Data confidence C: {score.data_confidence:.0f} / 100")
     lines.append(f"🎯 VERDICT: {v_emoji} {score.verdict.value}")
     lines.append(f"⚠️ RISK: {r_emoji} {score.risk.value}")
-    lines.append(f"📊 Confidence: {int(score.confidence * 100)}%")
-    lines.append(f"{chain_badge} Chain: {coin.chain.title()}")
     lines.append("")
+
+    # Invalidation conditions (guide §6)
+    if score.invalidation:
+        lines.append("❗ What could invalidate it:")
+        lines.extend(f"➰ {x}" for x in score.invalidation[:3])
+        lines.append("")
 
     # Why triggered
     why = []
@@ -196,11 +209,16 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
 
 
 def should_send_alert(alert: Alert, mode: str = "all", min_confidence: float = 0.2) -> bool:
-    """Filter alert by subscription mode and confidence."""
+    """Filter alert by tier, mode, and confidence (guide §4)."""
+    from memecoin_alert_bot.engine.models import Tier
+
+    # Hard-gate failure / extreme risk → suppress by default.
+    if alert.score.tier == Tier.HIGH_RISK:
+        return False
     if alert.score.confidence < min_confidence:
         return False
     if mode == "high":
-        return alert.score.verdict.value == "BUY" or alert.score.confidence >= 0.7
+        return alert.score.tier == Tier.DIAMOND or alert.score.confidence >= 0.7
     # Suppress PASS verdicts unless actual risk signals are present.
     if alert.score.verdict.value == "PASS" and not alert.signals:
         return False

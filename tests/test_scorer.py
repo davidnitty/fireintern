@@ -3,7 +3,7 @@
 import pytest
 
 from memecoin_alert_bot.engine import detectors, scorer
-from memecoin_alert_bot.engine.models import CoinData, RiskLevel, Verdict
+from memecoin_alert_bot.engine.models import CoinData, RiskLevel, Tier, Verdict
 
 
 def test_healthy_meme_scores_buy():
@@ -18,11 +18,35 @@ def test_healthy_meme_scores_buy():
         holders=2_500,
         age_seconds=600,
         tokenized_agent=True,
+        dev_wallet="DevWallet111111111111111111111111111111111",
+        pool_address="PoolAddr11111111111111111111111111111111",
+        sources={"pumpfun": {"ok": True}},
     )
+    coin.safety.mint_authority_enabled = False
+    coin.safety.freeze_authority_enabled = False
     signals = detectors.run_all(coin)
     score = scorer.score_coin(coin, signals)
     assert score.verdict in (Verdict.BUY, Verdict.WAIT)
     assert score.risk in (RiskLevel.LOW, RiskLevel.MEDIUM)
+    assert score.gates_passed is True
+    assert score.quality > 50
+
+
+def test_unknown_authority_downgrades_tier():
+    """A coin with unknown deployer/authority must not get a high tier."""
+    coin = CoinData(
+        mint="UnknownAuth111111111111111111111111111111111",
+        symbol="UNK",
+        name="Unknown Authority",
+        market_cap=500_000,
+        volume_24h=1_000_000,
+        liquidity=150_000,
+        holders=2_500,
+    )
+    signals = detectors.run_all(coin)
+    score = scorer.score_coin(coin, signals)
+    # Unknown authority is a critical gate → cannot be DIAMOND.
+    assert score.tier != Tier.DIAMOND
 
 
 def test_bundled_honeypot_passes():

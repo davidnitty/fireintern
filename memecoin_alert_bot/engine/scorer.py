@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from memecoin_alert_bot.engine import gates
 from memecoin_alert_bot.engine.models import (
     CoinData,
     RiskLevel,
@@ -9,6 +10,7 @@ from memecoin_alert_bot.engine.models import (
     ScoreResult,
     Signal,
     SignalType,
+    Tier,
     Verdict,
 )
 
@@ -197,8 +199,69 @@ def determine_risk(coin: CoinData, bundling_score: float, signals: list[Signal])
     return RiskLevel.LOW
 
 
+# ── Revised three-axis scores (guide §4) ─────────────────────────────────
+
+
+def compute_quality(coin: CoinData, signals: list[Signal], p: float, l: float, h: float, n: float) -> float:
+    """Quality (0-100): organic flow, liquidity, momentum, dev, holders, narrative."""
+    flow = p  # buying pressure
+    momentum = min(1.0, coin.vol_mc_ratio / 1.0) if coin.vol_mc_ratio else 0.3
+    q = (
+        0.20 * flow
+        + 0.20 * l
+        + 0.15 * momentum
+        + 0.15 * score_dev_wallet(coin)
+        + 0.10 * h
+        + 0.10 * n
+        + 0.10 * min(1.0, len(signals) / 3)
+    )
+    return round(q * 100, 1)
+
+
+def compute_risk(coin: CoinData, b: float, risk: RiskLevel) -> float:
+    """Risk (0-100): authority, exit, liquidity, deployer, coordination."""
+    authority = 0.0
+    if coin.safety.mint_authority_enabled is True:
+        authority += 0.4
+    if coin.safety.freeze_authority_enabled is True:
+        authority += 0.3
+    exit_risk = 0.0 if coin.pool_address or coin.chain == "solana" else 0.5
+    coordination = min(1.0, coin.safety.bundled_pct / 60)
+    r = 0.35 * b + 0.25 * authority + 0.20 * exit_risk + 0.20 * coordination
+    if risk == RiskLevel.EXTREME:
+        r = max(r, 0.9)
+    elif risk == RiskLevel.HIGH:
+        r = max(r, 0.7)
+    return round(min(1.0, r) * 100, 1)
+
+
+def compute_confidence(coin: CoinData, gate_results: list) -> float:
+    """Data confidence (0-100): freshness, source agreement, completeness."""
+    completeness = sum(
+        1 for v in (coin.market_cap, coin.volume_24h, coin.holders, coin.liquidity, coin.price) if v is not None
+    ) / 5
+    source_count = sum(1 for v in coin.sources.values() if v is not None)
+    source_agreement = min(1.0, source_count / 3)
+    freshness = 1.0
+    if coin.age_seconds is not None and coin.age_seconds > gates.MAX_AGE_SECONDS:
+        freshness = 0.4
+    c = 0.5 * completeness + 0.3 * source_agreement + 0.2 * freshness
+    return round(c * 100, 1)
+
+
+def assign_tier(gates_passed: bool, q: float, r: float, c: float, risk: RiskLevel) -> Tier:
+    """Map (gates, Q, R, C) to a relative tier (guide §4)."""
+    if not gates_passed or risk == RiskLevel.EXTREME or r >= 80:
+        return Tier.HIGH_RISK
+    if q >= 60 and r <= 40 and c >= 60:
+        return Tier.DIAMOND
+    if q >= 40 and r <= 60 and c >= 40:
+        return Tier.STANDARD
+    return Tier.GAMBLE
+
+
 def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
-    """Compute the composite SPYZER score and produce a verdict."""
+    """Compute composite + revised Q/R/C scores, gates, tier, and verdict."""
     b = score_bundling(coin)
     d = score_dev_wallet(coin)
     n = score_narrative(coin, signals)
@@ -220,9 +283,15 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
     )
 
     risk = determine_risk(coin, b, signals)
-
-    # Clamp between -1 and 1, then shift to 0-1 for confidence display.
     composite = max(-1.0, min(1.0, composite))
+
+    # Hard gates run before any high-conviction label (guide §3.2).
+    gates_passed, gate_results = gates.evaluate_gates(coin)
+
+    quality = compute_quality(coin, signals, p, l, h, n)
+    risk_score = compute_risk(coin, b, risk)
+    confidence = compute_confidence(coin, gate_results)
+    tier = assign_tier(gates_passed, quality, risk_score, confidence, risk)
 
     explanation = [
         f"Bundling risk {b:.2f} × {WEIGHTS['bundling']}",
@@ -235,8 +304,8 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
         f"Buy pressure {p:.2f} × {WEIGHTS['buying_pressure']}",
     ]
 
-    # Risk override: EXTREME -> PASS regardless of score.
-    if risk == RiskLevel.EXTREME:
+    # Verdict kept for familiarity but derived from tier + composite.
+    if tier == Tier.HIGH_RISK or risk == RiskLevel.EXTREME:
         verdict = Verdict.PASS
     elif composite > 0.5:
         verdict = Verdict.BUY
@@ -247,18 +316,18 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
     else:
         verdict = Verdict.PASS
 
-    # Confidence derived from signal confidence and data completeness.
-    signal_conf = sum(s.confidence for s in signals) / max(len(signals), 1)
-    data_completeness = sum(
-        1 for v in (coin.market_cap, coin.volume_24h, coin.holders, coin.liquidity) if v is not None
-    ) / 4
-    confidence = 0.5 * signal_conf + 0.5 * data_completeness
-
     return ScoreResult(
         composite_score=round(composite, 3),
-        confidence=round(confidence, 3),
+        confidence=round(confidence / 100, 3),
         verdict=verdict,
         risk=risk,
+        quality=quality,
+        risk_score=risk_score,
+        data_confidence=confidence,
+        tier=tier,
+        gates=gate_results,
+        gates_passed=gates_passed,
+        invalidation=gates.build_invalidation(coin),
         breakdown=ScoreBreakdown(
             bundling=round(b, 3),
             dev_wallet=round(d, 3),

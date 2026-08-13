@@ -139,21 +139,26 @@ class TelegramBot:
             logger.warning("Telegram application not ready; alert not sent")
             return False
 
-        chat_id = self.settings.telegram_chat_id or os.environ.get("TELEGRAM_CHAT_ID")
-        if not chat_id:
+        chat_ids = self.settings.get_chat_ids() or (
+            [os.environ.get("TELEGRAM_CHAT_ID")] if os.environ.get("TELEGRAM_CHAT_ID") else []
+        )
+        chat_ids = [c for c in chat_ids if c]
+        if not chat_ids:
             logger.warning("No TELEGRAM_CHAT_ID configured")
             return False
 
-        try:
-            text, keyboard = format_alert(alert)
-            await self.application.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="Markdown",
-                reply_markup=keyboard,
-                disable_web_page_preview=True,
-            )
-            return True
-        except Exception:
-            logger.exception("Failed to send Telegram alert")
-            return False
+        text, keyboard = format_alert(alert)
+        sent_any = False
+        for chat_id in chat_ids:
+            try:
+                await self.application.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="Markdown",
+                    reply_markup=keyboard,
+                    disable_web_page_preview=True,
+                )
+                sent_any = True
+            except Exception:
+                logger.exception("Failed to send Telegram alert to %s", chat_id)
+        return sent_any

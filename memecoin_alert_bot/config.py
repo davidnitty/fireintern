@@ -16,8 +16,19 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = Field(..., alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
+    # Comma-separated extra chat/group IDs to also receive alerts.
+    telegram_chat_ids: str = Field(default="", alias="TELEGRAM_CHAT_IDS")
     webhook_url: str = Field(default="", alias="WEBHOOK_URL")
     port: int = Field(default=8000, alias="PORT")
+
+    def get_chat_ids(self) -> list[str]:
+        """Return all destination chat IDs (primary + extras), deduped."""
+        ids: list[str] = []
+        for raw in [self.telegram_chat_id, *self.telegram_chat_ids.split(",")]:
+            cid = raw.strip()
+            if cid and cid not in ids:
+                ids.append(cid)
+        return ids
 
     # API keys
     solscan_api_key: str = Field(default="", alias="SOLSCAN_API_KEY")

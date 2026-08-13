@@ -78,6 +78,11 @@ def _audit_bars(risk: RiskLevel) -> str:
     return "🟧" * count + "🟩" * (4 - count)
 
 
+def _audit_score(score) -> int:
+    """Map risk level to a 0-10 audit score (higher = safer)."""
+    return {RiskLevel.LOW: 8, RiskLevel.MEDIUM: 6, RiskLevel.HIGH: 4, RiskLevel.EXTREME: 2}.get(score.risk, 5)
+
+
 def _short_addr(addr: str) -> str:
     """0x1234...5678 form."""
     if not addr:
@@ -105,80 +110,58 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
 
     lines: list[str] = []
 
-    # Header — tier + discovery signal (guide §6)
-    lines.append(f"🚨 NEW Fire Intern CALL ⦿")
-    lines.append(f"{score.tier.emoji} {score.tier.label} — {alert.primary_signal}")
-    lines.append(f"🔍 {coin.name} (${coin.symbol})")
-    lines.append(
-        f"➰{r_emoji} 🌱{_fmt_age(coin.age_seconds)} 👀{coin.holders or 0}"
-    )
+    # ── Header (matches reference image) ─────────────────────────────────
+    lines.append(f"🟩 {coin.name} (${coin.symbol})")
+    lines.append(f"✏️ {r_emoji} 🌱{_fmt_age(coin.age_seconds)} 👀{coin.holders or 0}")
     lines.append("")
 
-    # Token stats
+    # ── Token Stats (tree connectors) ────────────────────────────────────
     lines.append("📊 Token Stats")
-    lines.append(f"➰ MC:   {format_currency(coin.market_cap)}")
-    lines.append(f"➰ ATH:  {format_currency(coin.market_cap)}")  # no ATH tracking yet
-    lines.append(f"➰ USD:  {_fmt_price(coin.price)}")
-    lines.append(f"➰ LIQ:  {format_currency(coin.liquidity)}")
-    lines.append(f"➰ VOL:  {format_currency(coin.volume_24h)} (24h)")
-    lines.append(f"➰ 1H:   B {buys} / S {sells} ({buy_pct}%)")
-    lines.append(f"➰ HLD:  {coin.holders or 'N/A'}")
-    lines.append(f"➰ P:    {_short_addr(coin.mint)} 🦄")
-    lines.append(f"➰ DEV:  {_short_addr(coin.dev_wallet or coin.deployer or '')}")
+    lines.append(f"├─ MC:   {format_currency(coin.market_cap)}")
+    lines.append(f"├─ ATH:  {format_currency(coin.market_cap)}")
+    lines.append(f"├─ USD:  {_fmt_price(coin.price)}")
+    lines.append(f"├─ LIQ:  {format_currency(coin.liquidity)}")
+    lines.append(f"├─ VOL:  {format_currency(coin.volume_24h)} (24h)")
+    lines.append(f"├─ 1H:   B {buys} / S {sells} ({buy_pct}%)")
+    lines.append(f"├─ HLD:  {coin.holders or 'N/A'}")
+    lines.append(f"├─ P:    {_short_addr(coin.mint)} 🦄")
+    lines.append(f"└─ DEV:  {_short_addr(coin.dev_wallet or coin.deployer or '')}")
     lines.append("")
 
-    # Socials
+    # ── Socials ──────────────────────────────────────────────────────────
     lines.append("🔗 Socials")
     social_parts = []
+    if coin.telegram or coin.social_links.get("telegram"):
+        social_parts.append("TG")
     if coin.website or coin.social_links.get("website"):
         social_parts.append("Web")
     if coin.twitter or coin.social_links.get("twitter"):
         social_parts.append("𝕏")
-    if coin.telegram or coin.social_links.get("telegram"):
-        social_parts.append("TG")
     social_parts.append("About")
-    lines.append(f"➰ {' • '.join(social_parts)}")
+    lines.append(f"└─ {' • '.join(social_parts)}")
     lines.append("")
 
-    # Risk / authority / venue (guide §3.3 venue-aware)
-    lines.append(f"⚠️ Audit {_audit_bars(score.risk)}")
-    lines.append(f"❌ LP Ratio [{_lp_ratio(coin)}]")
-    mint_auth = coin.safety.mint_authority_enabled
-    freeze_auth = coin.safety.freeze_authority_enabled
-    lines.append(f"❌ Mint Auth: {'Active' if mint_auth is True else ('Revoked' if mint_auth is False else 'Unknown')}")
-    lines.append(f"❌ Freeze Auth: {'Active' if freeze_auth is True else ('Revoked' if freeze_auth is False else 'Unknown')}")
-    venue = "DEX pool" if coin.pool_address else ("bonding curve" if coin.chain == "solana" else "unknown")
-    lines.append(f"🏛 Venue: {venue} ({coin.chain.title()})")
-    sell_route = "Verified" if (coin.pool_address or coin.chain == "solana") else "Unverified"
-    lines.append(f"💸 Sell route: {sell_route}")
+    # ── Audit (score /10, LP ratio, DEX status) ──────────────────────────
+    lines.append(f"🛡 Audit [{_audit_score(score)}/10]")
+    lines.append(f"🩸 LP Ratio [{_lp_ratio(coin)}]")
+    venue = "DEX" if coin.pool_address else ("CURVE" if coin.chain == "solana" else "DEX")
+    paid = "PAID" if coin.safety.lp_locked else "NOT PAID"
+    lines.append(f"👹 {venue} [{paid}] [info]")
     lines.append("")
 
-    # Scores (Q / R / C) — separate axes, not a single score (guide §4)
-    lines.append("📈 Scores")
-    lines.append(f"➰ Quality Q: {score.quality:.0f} / 100")
-    lines.append(f"➰ Risk R: {score.risk_score:.0f} / 100")
-    lines.append(f"➰ Data confidence C: {score.data_confidence:.0f} / 100")
-    lines.append(f"🎯 VERDICT: {v_emoji} {score.verdict.value}")
-    lines.append(f"⚠️ RISK: {r_emoji} {score.risk.value}")
-    lines.append("")
-
-    # Invalidation conditions (guide §6)
-    if score.invalidation:
-        lines.append("❗ What could invalidate it:")
-        lines.extend(f"➰ {x}" for x in score.invalidation[:3])
+    # ── Signal ticker strip ──────────────────────────────────────────────
+    if alert.signals:
+        strip = "•".join(s.signal_type.label.split()[0][:3].upper() for s in alert.signals[:8])
+        lines.append(strip)
         lines.append("")
 
-    # Why triggered
-    why = []
-    for sig in alert.signals:
-        for reason in sig.reasons[:2]:
-            why.append(f"➰ {sig.signal_type.emoji} {reason}")
-    if why:
-        lines.append("✅ Why triggered:")
-        lines.extend(why)
-        lines.append("")
+    # ── Scores (Q / R / C) + tier (guide §4) ─────────────────────────────
+    lines.append(f"{score.tier.emoji} {score.tier.label}")
+    lines.append(f"Q {score.quality:.0f} • R {score.risk_score:.0f} • C {score.data_confidence:.0f}")
+    lines.append(f"🎯 {v_emoji} {score.verdict.value} {r_emoji}")
+    lines.append("")
 
-    lines.append("⚠️ NFA | DYOR | Trade Responsibly")
+    # ── Full contract address at bottom ──────────────────────────────────
     lines.append(f"`{coin.mint}`")
 
     # ── Inline keyboard ──────────────────────────────────────────────────

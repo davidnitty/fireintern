@@ -123,6 +123,15 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
     lines.append(f"├─ LIQ:  {format_currency(coin.liquidity)}")
     lines.append(f"├─ VOL:  {format_currency(coin.volume_24h)} (24h)")
     lines.append(f"├─ 1H:   B {buys} / S {sells} ({buy_pct}%)")
+    if coin.flow_data_quality == "verified_usd" and coin.vl_ratio_1h is not None:
+        lines.append(f"├─ V/L:  {coin.vl_ratio_1h:.1f}x")
+        flow = coin.flow_label if coin.flow_label != "-" else "unknown"
+        speed = f" (S× {coin.swap_speed:.1f})" if coin.swap_speed is not None else ""
+        lines.append(f"├─ FLOW: {flow}{speed}")
+    elif coin.flow_data_quality != "unknown":
+        lines.append("├─ FLOW: directional only")
+    else:
+        lines.append("├─ FLOW: unknown")
     lines.append(f"├─ HLD:  {coin.holders or 'N/A'}")
     lines.append(f"├─ P:    {_short_addr(coin.mint)} 🦄")
     lines.append(f"└─ DEV:  {_short_addr(coin.dev_wallet or coin.deployer or '')}")

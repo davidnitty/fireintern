@@ -90,6 +90,21 @@ class CoinData(BaseModel):
     buy_volume_1h: float | None = None
     sell_volume_1h: float | None = None
     buy_pressure: float | None = None
+    # Verified short-window flow fields. USD only when flow_data_quality is
+    # 'verified_usd'; chain-native values are marked 'directional_only'.
+    volume_5m: float | None = None
+    volume_1h: float | None = None
+    buys_5m: int | None = None
+    sells_5m: int | None = None
+    buys_1h: int | None = None
+    sells_1h: int | None = None
+    price_change_5m: float | None = None
+    price_change_1h: float | None = None
+    vl_ratio_1h: float | None = None
+    flow_ratio: float | None = None
+    swap_speed: float | None = None
+    flow_label: str = "-"
+    flow_data_quality: str = "unknown"  # verified_usd / directional_only / unknown
     liquidity: float | None = None
     price: float | None = None
     price_sol: float | None = None

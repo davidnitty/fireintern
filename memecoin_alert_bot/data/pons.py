@@ -128,10 +128,12 @@ class PonsIndexer:
             dev_wallet=deployer,
             price=price_in_pair,
             market_cap=market_cap,
-            volume_24h=swap_info.get("volume", 0.0),
-            buy_volume_1h=swap_info.get("buy_volume", 0.0),
-            sell_volume_1h=swap_info.get("sell_volume", 0.0),
+            # Chain-native pair amounts are directional-only; do not mislabel
+            # a ~42 minute observation as USD 1h/24h volume.
             buy_pressure=swap_info.get("buy_pressure", 0.5),
+            buys_5m=swap_info.get("buys", 0),
+            sells_5m=swap_info.get("sells", 0),
+            flow_data_quality="directional_only",
             age_seconds=age_seconds,
             pool_address=pool_addr,
             pair_token=pair_addr,

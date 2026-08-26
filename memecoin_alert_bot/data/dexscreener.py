@@ -39,6 +39,15 @@ class DexScreenerClient:
         """Return merged metadata keyed by the fields CoinData expects."""
         result = {
             "volume_24h": None,
+            "volume_5m": None,
+            "volume_1h": None,
+            "buys_5m": None,
+            "sells_5m": None,
+            "buys_1h": None,
+            "sells_1h": None,
+            "price_change_5m": None,
+            "price_change_1h": None,
+            "flow_data_quality": "unknown",
             "liquidity": None,
             "price": None,
             "market_cap": None,
@@ -59,11 +68,23 @@ class DexScreenerClient:
         if best is None:
             return result
 
-        result["volume_24h"] = float(best.get("volume", {}).get("h24", 0) or 0)
+        volume = best.get("volume", {})
+        txns = best.get("txns", {})
+        price_change = best.get("priceChange", {})
+
+        # DexScreener values are USD-normalized for the selected pair.
+        result["volume_24h"] = float(volume.get("h24", 0) or 0)
+        result["volume_5m"] = float(volume.get("m5", 0) or 0)
+        result["volume_1h"] = float(volume.get("h1", 0) or 0)
+        result["buys_5m"] = int(txns.get("m5", {}).get("buys", 0) or 0)
+        result["sells_5m"] = int(txns.get("m5", {}).get("sells", 0) or 0)
+        result["buys_1h"] = int(txns.get("h1", {}).get("buys", 0) or 0)
+        result["sells_1h"] = int(txns.get("h1", {}).get("sells", 0) or 0)
+        result["price_change_5m"] = float(price_change.get("m5", 0) or 0)
+        result["price_change_1h"] = float(price_change.get("h1", 0) or 0)
         result["liquidity"] = float(best.get("liquidity", {}).get("usd", 0) or 0)
         result["price"] = float(best.get("priceUsd", 0) or 0)
         result["market_cap"] = float(best.get("marketCap", 0) or 0)
-        if result["market_cap"] and not result["volume_24h"]:
-            result["volume_24h"] = float(best.get("volume", {}).get("h24", 0) or 0)
+        result["flow_data_quality"] = "verified_usd"
         result["sources"]["dexscreener"] = best
         return result

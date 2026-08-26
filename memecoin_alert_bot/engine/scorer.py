@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from memecoin_alert_bot.engine import gates
+from memecoin_alert_bot.engine.flow import compute_flow_metrics, score_volume_velocity
 from memecoin_alert_bot.engine.models import (
     CoinData,
     RiskLevel,
@@ -202,18 +203,23 @@ def determine_risk(coin: CoinData, bundling_score: float, signals: list[Signal])
 # ── Revised three-axis scores (guide §4) ─────────────────────────────────
 
 
-def compute_quality(coin: CoinData, signals: list[Signal], p: float, l: float, h: float, n: float) -> float:
-    """Quality (0-100): organic flow, liquidity, momentum, dev, holders, narrative."""
+def compute_quality(coin: CoinData, signals: list[Signal], p: float, l: float, h: float, n: float, velocity: float) -> float:
+    """Quality (0-100): organic flow, liquidity, momentum, dev, holders, narrative.
+
+    Velocity is capped at 10% and returns neutral when its data units are not
+    verified. It cannot dominate Quality Q.
+    """
     flow = p  # buying pressure
     momentum = min(1.0, coin.vol_mc_ratio / 1.0) if coin.vol_mc_ratio else 0.3
     q = (
-        0.20 * flow
+        0.18 * flow
         + 0.20 * l
-        + 0.15 * momentum
+        + 0.12 * momentum
         + 0.15 * score_dev_wallet(coin)
         + 0.10 * h
         + 0.10 * n
-        + 0.10 * min(1.0, len(signals) / 3)
+        + 0.05 * min(1.0, len(signals) / 3)
+        + 0.10 * velocity
     )
     return round(q * 100, 1)
 
@@ -262,6 +268,10 @@ def assign_tier(gates_passed: bool, q: float, r: float, c: float, risk: RiskLeve
 
 def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
     """Compute composite + revised Q/R/C scores, gates, tier, and verdict."""
+    # Calculate short-window flow only after provider normalization. Unknown
+    # or non-USD chain units receive neutral velocity, never a positive boost.
+    compute_flow_metrics(coin)
+
     b = score_bundling(coin)
     d = score_dev_wallet(coin)
     n = score_narrative(coin, signals)
@@ -270,6 +280,7 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
     h = score_holders(coin)
     c = score_chart_structure(coin)
     p = score_buying_pressure(coin)
+    velocity = score_volume_velocity(coin)
 
     composite = (
         b * WEIGHTS["bundling"]
@@ -288,7 +299,7 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
     # Hard gates run before any high-conviction label (guide §3.2).
     gates_passed, gate_results = gates.evaluate_gates(coin)
 
-    quality = compute_quality(coin, signals, p, l, h, n)
+    quality = compute_quality(coin, signals, p, l, h, n, velocity)
     risk_score = compute_risk(coin, b, risk)
     confidence = compute_confidence(coin, gate_results)
     tier = assign_tier(gates_passed, quality, risk_score, confidence, risk)

@@ -40,6 +40,8 @@ FUNCTION_SELECTORS = {
     "socials": Web3.keccak(text="socials()")[:4].hex(),
     "liquidityPool": Web3.keccak(text="liquidityPool()")[:4].hex(),
     "slot0": Web3.keccak(text="slot0()")[:4].hex(),
+    "token0": Web3.keccak(text="token0()")[:4].hex(),
+    "token1": Web3.keccak(text="token1()")[:4].hex(),
 }
 
 
@@ -247,8 +249,10 @@ class RobinhoodChainClient:
             ratio = self.decode_sqrt_price_x96(sqrt_price_x96)
 
             pair = to_checksum_address(pair_token) if pair_token else to_checksum_address(WETH)
-            # isToken0 determines price direction.
-            is_token0 = token.lower() < pair.lower()
+            # Query actual pool ordering; lexical address comparison is unsafe.
+            token0_raw = await self._rpc("eth_call", [{"to": pool, "data": "0x" + self.selector("token0")}, "latest"])
+            token0 = self.decode_address(token0_raw) if token0_raw else ""
+            is_token0 = token.lower() == token0.lower()
             price_in_pair = ratio if is_token0 else 1 / ratio if ratio else 0.0
             # We don't have an ETH/USD oracle here; return nominal price.
             return {
@@ -279,41 +283,50 @@ class RobinhoodChainClient:
         try:
             latest = int((await self._rpc("eth_blockNumber", [])) or "0x0", 16)
         except Exception:
-            return {"buy_volume": 0.0, "sell_volume": 0.0, "buy_pressure": 0.5, "volume": 0.0}
+            return {"buy_volume": 0.0, "sell_volume": 0.0, "buy_pressure": 0.5, "volume": 0.0, "window_seconds": 0, "unit": "unknown"}
 
         from_block = max(0, latest - blocks_back)
-        pair = to_checksum_address(pair_token) if pair_token else to_checksum_address(WETH)
-        is_token0 = token.lower() < pair.lower()
+        # Use actual V3 pool token order, never lexical address order.
+        token0_raw = await self._rpc("eth_call", [{"to": pool, "data": "0x" + self.selector("token0")}, "latest"])
+        token0 = self.decode_address(token0_raw) if token0_raw else ""
+        is_token0 = token.lower() == token0.lower()
 
         logs = await self.get_logs(from_block, latest, [pool], [[SWAP_TOPIC0]])
         buy_vol = 0.0
         sell_vol = 0.0
+        buys = 0
+        sells = 0
         for log in logs:
             try:
                 raw = bytes.fromhex(log.get("data", "0x").replace("0x", ""))
                 amount0, amount1 = eth_abi_decode(["int256", "int256"], raw[:64])
-                amount0_int = int(amount0)
-                amount1_int = int(amount1)
+                token_signed = int(amount0) if is_token0 else int(amount1)
+                pair_signed = int(amount1) if is_token0 else int(amount0)
             except Exception:
                 continue
 
-            if is_token0:
-                # Negative amount0 = token sold (withdrawn from pool), positive = token bought
-                # But this is simplified; use amount1 as the counter-party direction
-                token_signed = amount0_int
-                pair_signed = amount1_int
-            else:
-                token_signed = amount1_int
-                pair_signed = amount0_int
-
-            # token_signed < 0 means pool received tokens (user sold);
-            # token_signed > 0 means pool sent tokens (user bought).
-            swap_size = abs(pair_signed) / 1e18  # pair-token decimals
+            # Uniswap V3 deltas are from the pool's perspective:
+            # tracked token < 0 => pool sent token => user BUY
+            # tracked token > 0 => pool received token => user SELL
+            # Pair amount is chain-native / pair-denominated; keep it directional
+            # only, never map it into USD 1h/24h fields.
+            swap_size = abs(pair_signed) / 1e18
             if token_signed < 0:
-                sell_vol += swap_size
-            else:
                 buy_vol += swap_size
+                buys += 1
+            elif token_signed > 0:
+                sell_vol += swap_size
+                sells += 1
 
         total_vol = buy_vol + sell_vol
         pressure = buy_vol / total_vol if total_vol > 0 else 0.5
-        return {"buy_volume": buy_vol, "sell_volume": sell_vol, "buy_pressure": pressure, "volume": total_vol}
+        return {
+            "buy_volume": buy_vol,
+            "sell_volume": sell_vol,
+            "buy_pressure": pressure,
+            "volume": total_vol,
+            "buys": buys,
+            "sells": sells,
+            "window_seconds": blocks_back * BLOCK_TIME_SECONDS,
+            "unit": "pair_token_native",
+        }

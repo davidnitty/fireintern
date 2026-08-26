@@ -86,9 +86,33 @@ def merge_enrichment(coin: CoinData, enrichment: dict[str, Any]) -> CoinData:
         "price_sol",
         "holders",
         "age_seconds",
+        "buy_volume_1h",
+        "sell_volume_1h",
+        "buy_pressure",
+        "volume_5m",
+        "volume_1h",
+        "buys_5m",
+        "sells_5m",
+        "buys_1h",
+        "sells_1h",
+        "price_change_5m",
+        "price_change_1h",
+        "vl_ratio_1h",
+        "flow_ratio",
+        "swap_speed",
+        "flow_label",
     ]:
         if enrichment.get(key) is not None:
             data[key] = enrichment[key]
+
+    # Verified USD flow data must not be overwritten by lower-quality chain
+    # native or inferred data from a subsequent source.
+    incoming_quality = enrichment.get("flow_data_quality")
+    if incoming_quality:
+        existing_quality = data.get("flow_data_quality", "unknown")
+        quality_rank = {"unknown": 0, "directional_only": 1, "verified_usd": 2}
+        if quality_rank.get(incoming_quality, 0) >= quality_rank.get(existing_quality, 0):
+            data["flow_data_quality"] = incoming_quality
 
     if "tokenized_agent" in enrichment:
         data["tokenized_agent"] = data.get("tokenized_agent", False) or bool(

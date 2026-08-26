@@ -43,7 +43,7 @@ class TelegramBot:
         await self.application.initialize()
         self._ready = True
         logger.info(
-            "Telegram destinations configured: %d", len(self.settings.get_chat_ids())
+            "Telegram destinations configured: %d\n", len(self.settings.get_chat_ids())
         )
         return self.application
 

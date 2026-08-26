@@ -176,9 +176,15 @@ class PonsIndexer:
         )
         logger.info("Pons poll blocks %d-%d: %d new tokens", from_block, to_block, len(logs))
         for log in logs:
-            coin = await self._process_log(log)
-            if coin:
-                await self._handle(coin)
+            try:
+                coin = await self._process_log(log)
+                if coin:
+                    await self._handle(coin)
+            except (IndexError, KeyError, ValueError, TypeError) as exc:
+                # A malformed or newer event must not abort the whole block batch.
+                logger.debug("Skipping malformed Pons log: %s", exc)
+            except Exception:
+                logger.exception("Skipping unexpected Pons log error")
         return to_block
 
     async def run(

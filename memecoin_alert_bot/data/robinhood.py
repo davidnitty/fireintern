@@ -200,6 +200,8 @@ class RobinhoodChainClient:
             {"to": token, "data": "0x" + self.selector("description")},
             {"to": token, "data": "0x" + self.selector("liquidityPool")},
             {"to": token, "data": "0x" + self.selector("socials")},
+            # EVM ownership facts (generic ERC-20 / Ownable).
+            {"to": token, "data": "0x" + self.selector("owner")},
         ]
         results = await self.batch_call(calls)
         name = self.decode_string(results[0]) if results[0] else ""
@@ -218,6 +220,9 @@ class RobinhoodChainClient:
 
         total_supply = total_supply_raw / (10**decimals) if decimals else total_supply_raw
 
+        owner = self.decode_address(results[7]) if len(results) > 7 and results[7] else ""
+        ownership_renounced = owner.lower() in ("", "0x", "0x" + "0" * 40, f"0x{'0' * 40}")
+
         return {
             "name": name,
             "symbol": symbol,
@@ -225,6 +230,8 @@ class RobinhoodChainClient:
             "total_supply": total_supply,
             "description": description,
             "pool_address": pool,
+            "owner": owner,
+            "ownership_renounced": ownership_renounced,
             "socials": {
                 k: v
                 for k, v in zip(

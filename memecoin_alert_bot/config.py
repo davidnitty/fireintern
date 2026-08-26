@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     # Robinhood Chain (Arbitrum Orbit L2)
     enable_pons_robinhood: bool = Field(default=True, alias="ENABLE_PONS_ROBINHOOD")
     enable_noxa_robinhood: bool = Field(default=True, alias="ENABLE_NOXA_ROBINHOOD")
+    enable_direct_discovery: bool = Field(default=True, alias="ENABLE_DIRECT_DISCOVERY")
     robinhood_rpc_url: str = Field(
         default="https://rpc.mainnet.chain.robinhood.com",
         alias="ROBINHOOD_RPC_URL",

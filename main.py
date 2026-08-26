@@ -14,6 +14,7 @@ from memecoin_alert_bot.bot.telegram import TelegramBot
 from memecoin_alert_bot.config import get_settings
 from memecoin_alert_bot.data.bitquery import BitqueryClient
 from memecoin_alert_bot.data.bubblemaps import BubblemapsClient
+from memecoin_alert_bot.data.direct_discovery import DirectDiscoveryIndexer
 from memecoin_alert_bot.data.dexscreener import DexScreenerClient
 from memecoin_alert_bot.data.noxa import NoxaIndexer
 from memecoin_alert_bot.data.pons import PonsIndexer
@@ -46,6 +47,7 @@ class BotApp:
         self._solana_semaphore = asyncio.Semaphore(5)  # limit concurrent enrichment
         self._pons_indexer: PonsIndexer | None = None
         self._noxa_indexer: NoxaIndexer | None = None
+        self._direct_discovery: DirectDiscoveryIndexer | None = None
         self._symbol_cooldowns: dict[str, float] = {}  # symbol -> last alert timestamp
 
     async def _init_clients(self) -> None:
@@ -188,11 +190,18 @@ class BotApp:
         na.add_token(coin.mint, narrative_text)
 
         # ── Buying-activity filter (strict — ONLY coins people are buying) ──
-        has_volume = (
+        # Verified USD volume OR verified buy/sell transaction counts.
+        # Directional-only chain data must show actual buy transactions.
+        has_verified_volume = (
             (coin.volume_24h is not None and coin.volume_24h > 0)
             or (coin.buy_volume_1h is not None and coin.buy_volume_1h > 0)
+            or (coin.volume_1h is not None and coin.volume_1h > 0)
         )
-        if not has_volume:
+        has_directional_buys = (
+            coin.flow_data_quality == "directional_only"
+            and ((coin.buys_5m or 0) + (coin.buys_1h or 0)) > 0
+        )
+        if not has_verified_volume and not has_directional_buys:
             logger.debug("Skipping %s — no buying activity detected", mint)
             return
 
@@ -291,6 +300,16 @@ class BotApp:
                 )
             )
 
+        # Direct ERC-20 / new-pool discovery (catches non-factory launches
+        # such as direct deployments and Uniswap v4 pairs).
+        if self.settings.enable_direct_discovery:
+            self._direct_discovery = DirectDiscoveryIndexer(
+                self.dexscreener,
+                self.robinhood,
+                token_handler=self._handle_robinhood_token,
+            )
+            robinhood_tasks.append(self._direct_discovery.start())
+
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -310,6 +329,8 @@ class BotApp:
                 await self._pons_indexer.stop()
             if self._noxa_indexer:
                 await self._noxa_indexer.stop()
+            if self._direct_discovery:
+                await self._direct_discovery.stop()
             telegram_task.cancel()
             for t in robinhood_tasks:
                 t.cancel()

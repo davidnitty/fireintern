@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.dexscreener.com/latest/dex"
 
 
+def import_time() -> float:
+    import time
+
+    return time.time()
+
+
 class DexScreenerClient:
     """Thin async wrapper around the DexScreener API."""
 
@@ -35,8 +41,31 @@ class DexScreenerClient:
         data = await fetch_json(self.session, f"{BASE_URL}/boosts/top/v1", timeout=15)
         return data if isinstance(data, list) else []
 
-    async def enrich_coin(self, mint: str, base: dict[str, Any]) -> dict[str, Any]:
+    async def get_new_pairs(self, chain_slug: str, max_age_minutes: int = 30) -> list[dict[str, Any]]:
+        """Discover recently created pairs on a chain via DexScreener search.
+
+        Uses the public search endpoint sorted by pair age; returns raw pair
+        objects for the caller to filter (liquidity floor, quote token, etc.).
+        """
+        url = f"{BASE_URL}/search?q={chain_slug}"
+        data = await fetch_json(self.session, url, timeout=20)
+        pairs = data.get("pairs", []) if data else []
+        now_ms = import_time() * 1000
+        fresh = []
+        for pair in pairs:
+            if pair.get("chainId") != chain_slug:
+                continue
+            created = pair.get("pairCreatedAt")
+            if not created:
+                continue
+            age_minutes = (now_ms - int(created)) / 60_000
+            if 0 <= age_minutes <= max_age_minutes:
+                fresh.append(pair)
+        return fresh
+
+    async def enrich_coin(self, mint: str, base: dict[str, Any], chain: str = "solana") -> dict[str, Any]:
         """Return merged metadata keyed by the fields CoinData expects."""
+        chain_slug = {"robinhood": "robinhoodchain"}.get(chain, chain)
         result = {
             "volume_24h": None,
             "volume_5m": None,
@@ -59,9 +88,9 @@ class DexScreenerClient:
         if not pairs:
             return result
 
-        sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
+        chain_pairs = [p for p in pairs if p.get("chainId") == chain_slug]
         best = max(
-            sol_pairs or pairs,
+            chain_pairs or pairs,
             key=lambda p: float(p.get("liquidity", {}).get("usd", 0) or 0),
             default=None,
         )

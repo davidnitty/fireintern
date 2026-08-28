@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -32,20 +33,37 @@ class TelegramBot:
         self.application: Application | None = None
         self._ready = False
 
-    async def setup(self) -> Application:
-        """Build the Telegram application and register command handlers."""
+    async def setup(self, retries: int = 6, backoff: float = 5.0) -> Application:
+        """Build the Telegram application and register command handlers.
+
+        Retries transient network failures (timeouts, DNS, TLS drops) so a
+        momentary outage cannot crash the whole bot at startup.
+        """
         builder = ApplicationBuilder().token(self.settings.telegram_bot_token)
         self.application = builder.build()
         self.application.add_handler(CommandHandler("start", self._cmd_start))
         self.application.add_handler(CommandHandler("status", self._cmd_status))
         self.application.add_handler(CommandHandler("recent", self._cmd_recent))
         self.application.add_handler(CommandHandler("test", self._cmd_test))
-        await self.application.initialize()
-        self._ready = True
-        logger.info(
-            "Telegram destinations configured: %d\n", len(self.settings.get_chat_ids())
-        )
-        return self.application
+
+        last_error: Exception | None = None
+        for attempt in range(1, retries + 1):
+            try:
+                await self.application.initialize()
+                self._ready = True
+                logger.info(
+                    "Telegram destinations configured: %d\n",
+                    len(self.settings.get_chat_ids()),
+                )
+                return self.application
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Telegram init failed (attempt %d/%d): %s — retrying in %.0fs",
+                    attempt, retries, exc, backoff * attempt,
+                )
+                await asyncio.sleep(backoff * attempt)
+        raise last_error  # type: ignore[misc]
 
     async def start(self) -> None:
         """Start polling or webhook depending on configuration."""

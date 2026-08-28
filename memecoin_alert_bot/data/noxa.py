@@ -23,6 +23,7 @@ from memecoin_alert_bot.data.robinhood import (
     WETH,
     RobinhoodChainClient,
     estimate_market_cap,
+    is_v3_pool_address,
 )
 from memecoin_alert_bot.engine.models import CoinData, SafetyInfo
 
@@ -89,11 +90,22 @@ class NoxaIndexer:
             return None
 
         socials = token_meta.get("socials", {})
-        pool_addr = token_meta.get("pool_address", "")
+        pool_raw = token_meta.get("pool_address", "")
+        # V4 pool IDs are not callable contracts; skip V3 RPC for them and
+        # let the DexScreener fallback price the token.
+        pool_addr: str | None = pool_raw if is_v3_pool_address(pool_raw) else None
 
-        price_info = await self.client.fetch_pool_price(pool_addr, token, WETH)
+        price_info = (
+            await self.client.fetch_pool_price(pool_addr, token, WETH)
+            if pool_addr
+            else {"price": None, "liquidity": None}
+        )
 
-        swap_info = await self.client.fetch_recent_swaps(pool_addr, token, WETH)
+        swap_info = (
+            await self.client.fetch_recent_swaps(pool_addr, token, WETH)
+            if pool_addr
+            else {"buy_volume": 0.0, "sell_volume": 0.0, "buy_pressure": 0.5, "volume": 0.0, "buys": 0, "sells": 0}
+        )
 
         price_in_pair = price_info.get("price")
         market_cap = estimate_market_cap(price_in_pair, token_meta.get("total_supply"))

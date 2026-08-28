@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiosqlite
@@ -50,6 +50,33 @@ CREATE TABLE IF NOT EXISTS backtest_snapshots (
     price REAL,
     score REAL,
     payload TEXT
+);
+
+CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mint TEXT,
+    chain TEXT,
+    symbol TEXT,
+    ts TEXT,
+    stage TEXT,
+    reason TEXT,
+    market_cap REAL,
+    score_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS alert_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id INTEGER,
+    mint TEXT,
+    horizon_min INTEGER,
+    alert_at TEXT,
+    price_alert REAL,
+    price_horizon REAL,
+    mc_alert REAL,
+    mc_horizon REAL,
+    pct_change REAL,
+    captured_at TEXT,
+    UNIQUE(alert_id, horizon_min)
 );
 
 CREATE TABLE IF NOT EXISTS chain_state (
@@ -221,3 +248,141 @@ class Storage:
         async with self._connection.execute(query, params) as cursor:
             rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+    # ── Backtesting ledger (guide §5) ────────────────────────────────────
+
+    async def record_decision(
+        self,
+        mint: str,
+        chain: str,
+        symbol: str,
+        stage: str,
+        reason: str = "",
+        market_cap: float | None = None,
+        score_json: str | None = None,
+    ) -> None:
+        """Record one evaluation decision — sent, suppressed, or rejected."""
+        await self._connection.execute(
+            """
+            INSERT INTO decisions (mint, chain, symbol, ts, stage, reason, market_cap, score_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mint,
+                chain,
+                symbol,
+                datetime.now(timezone.utc).isoformat(),
+                stage,
+                reason,
+                market_cap,
+                score_json,
+            ),
+        )
+        await self._connection.commit()
+
+    async def get_alerts_without_outcomes(self, horizons: list[int]) -> list[dict[str, Any]]:
+        """Return (alert_id, mint, generated_at, payload, horizon) rows needing outcomes.
+
+        A row is due when ``now >= alert_time + horizon`` and no outcome row
+        exists yet for that (alert, horizon) pair.
+        """
+        now = datetime.now(timezone.utc)
+        async with self._connection.execute(
+            "SELECT id, mint, generated_at, payload FROM alerts ORDER BY id"
+        ) as cursor:
+            alerts = await cursor.fetchall()
+        async with self._connection.execute(
+            "SELECT alert_id, horizon_min FROM alert_outcomes"
+        ) as cursor:
+            existing = {(r["alert_id"], r["horizon_min"]) for r in await cursor.fetchall()}
+
+        due: list[dict[str, Any]] = []
+        for row in alerts:
+            try:
+                alert_at = datetime.fromisoformat(row["generated_at"])
+            except (ValueError, TypeError):
+                continue
+            for horizon in horizons:
+                if (row["id"], horizon) in existing:
+                    continue
+                due_at = alert_at + timedelta(minutes=horizon)
+                if now >= due_at:
+                    due.append(
+                        {
+                            "alert_id": row["id"],
+                            "mint": row["mint"],
+                            "generated_at": row["generated_at"],
+                            "payload": row["payload"],
+                            "horizon_min": horizon,
+                        }
+                    )
+        return due
+
+    async def record_outcome(
+        self,
+        alert_id: int,
+        mint: str,
+        horizon_min: int,
+        alert_at: str,
+        price_alert: float | None,
+        price_horizon: float | None,
+        mc_alert: float | None,
+        mc_horizon: float | None,
+    ) -> None:
+        """Store one horizon outcome for an alert."""
+        pct = None
+        if price_alert and price_horizon and price_alert > 0:
+            pct = (price_horizon / price_alert - 1) * 100
+        await self._connection.execute(
+            """
+            INSERT OR IGNORE INTO alert_outcomes
+                (alert_id, mint, horizon_min, alert_at, price_alert, price_horizon,
+                 mc_alert, mc_horizon, pct_change, captured_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                alert_id,
+                mint,
+                horizon_min,
+                alert_at,
+                price_alert,
+                price_horizon,
+                mc_alert,
+                mc_horizon,
+                pct,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        await self._connection.commit()
+
+    async def calibration_summary(self) -> list[dict[str, Any]]:
+        """Join alerts with outcomes for per-tier precision analysis."""
+        async with self._connection.execute(
+            """
+            SELECT a.id, a.mint, a.symbol, a.generated_at, a.payload,
+                   o.horizon_min, o.pct_change
+            FROM alerts a
+            JOIN alert_outcomes o ON o.alert_id = a.id
+            ORDER BY a.id, o.horizon_min
+            """
+        ) as cursor:
+            rows = await cursor.fetchall()
+        summary = []
+        for row in rows:
+            tier = None
+            try:
+                payload = json.loads(row["payload"]) if row["payload"] else {}
+                tier = payload.get("score", {}).get("tier")
+            except Exception:
+                pass
+            summary.append(
+                {
+                    "alert_id": row["id"],
+                    "mint": row["mint"],
+                    "symbol": row["symbol"],
+                    "tier": tier,
+                    "horizon_min": row["horizon_min"],
+                    "pct_change": row["pct_change"],
+                }
+            )
+        return summary

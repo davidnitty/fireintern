@@ -30,6 +30,18 @@ def estimate_market_cap(price_in_pair: float | None, total_supply: float | None,
         return None
     return price_in_pair * total_supply * eth_usd
 
+
+def is_v3_pool_address(pool: str | None) -> bool:
+    """True when *pool* is a callable 20-byte EVM address (Uniswap v3 style).
+
+    Uniswap v4 pools are 32-byte pool IDs (66-char hex); they are not
+    contracts and cannot be targeted with eth_call.
+    """
+    if not pool or not isinstance(pool, str):
+        return False
+    addr = pool[2:] if pool.startswith("0x") else pool
+    return len(addr) == 40 and all(c in "0123456789abcdefABCDEF" for c in addr)
+
 # Minimal ABI fragments used for eth_call.
 FUNCTION_SELECTORS = {
     "name": Web3.keccak(text="name()")[:4].hex(),

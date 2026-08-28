@@ -284,6 +284,7 @@ class ScoreResult(BaseModel):
     tier: Tier = Tier.HIGH_RISK
     gates: list[GateResult] = Field(default_factory=list)
     gates_passed: bool = False
+    gates_unknown: bool = False  # unknown critical gate caps tier at STANDARD
     invalidation: list[str] = Field(default_factory=list)
 
     breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)

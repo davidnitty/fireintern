@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
 import sys
@@ -83,13 +84,15 @@ class BotApp:
 
     async def _enrich_solana_coin(self, coin) -> None:
         """Fetch and merge metadata from all configured Solana sources."""
+        from memecoin_alert_bot.utils.helpers import is_valid_api_key
+
         async with self._solana_semaphore:
             mint = coin.mint
 
             # Bitquery: primary data source for volume, price, buy pressure
             tasks = []
             bitquery_task = None
-            if self.settings.bitquery_api_key:
+            if is_valid_api_key(self.settings.bitquery_api_key):
                 bitquery_task = asyncio.create_task(self.bitquery.enrich_coin(mint))
                 tasks.append(bitquery_task)
 
@@ -99,12 +102,11 @@ class BotApp:
             if self.settings.enable_dexscreener:
                 tasks.append(self.dexscreener.enrich_coin(mint, {}))
 
-            # Safety / cluster
-            if self.settings.rugcheck_api_key:
-                tasks.append(self.rugcheck.enrich_coin(mint, {}))
-            if self.settings.solscan_api_key:
+            # Safety / cluster — Rugcheck is free/keyless, always run it.
+            tasks.append(self.rugcheck.enrich_coin(mint, {}))
+            if is_valid_api_key(self.settings.solscan_api_key):
                 tasks.append(self.solscan.enrich_coin(mint, {}))
-            if self.settings.bubblemaps_api_key:
+            if is_valid_api_key(self.settings.bubblemaps_api_key):
                 tasks.append(self.bubblemaps.enrich_coin(mint))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -143,7 +145,7 @@ class BotApp:
             return
 
         try:
-            coin = normalizer.create_from_pumpportal(event)
+            coin = normalizer.create_from_pumpportal(event, sol_usd=self.settings.sol_usd)
             coin = await self._enrich_solana_coin(coin)
 
             # Apply trade-tracker buy-pressure (Solana)
@@ -159,12 +161,51 @@ class BotApp:
         except Exception:
             logger.exception("Failed to process Solana token %s", mint)
 
-    async def _handle_robinhood_token(self, coin: CoinData) -> None:
-        """Process a Robinhood Chain token discovered by Pons or Noxa indexers."""
+    async def _enrich_robinhood_coin(self, coin: CoinData) -> CoinData:
+        """DexScreener fallback for Robinhood tokens lacking price/MC data.
+
+        Covers Uniswap v4 launches (non-callable pool IDs) and any token the
+        V3-only RPC path could not price. Verified USD windows upgrade the
+        directional-only flow data via normalizer precedence.
+        """
+        if coin.price is not None and coin.market_cap is not None:
+            return coin
         try:
+            enrichment = await self.dexscreener.enrich_coin(coin.mint, {}, chain="robinhood")
+            if enrichment.get("sources", {}).get("dexscreener"):
+                coin = normalizer.merge_enrichment(coin, enrichment)
+        except Exception as exc:
+            logger.debug("Robinhood Dex fallback failed for %s: %s", coin.mint, exc)
+        return coin
+
+    async def _handle_robinhood_token(self, coin: CoinData) -> None:
+        """Process a Robinhood Chain token discovered by Pons, Noxa, or direct discovery."""
+        try:
+            coin = await self._enrich_robinhood_coin(coin)
             await self._evaluate_and_alert(coin)
         except Exception:
             logger.exception("Failed to process Robinhood token %s", coin.mint)
+
+    async def _record_decision(
+        self,
+        coin: CoinData,
+        stage: str,
+        reason: str = "",
+        score_json: str | None = None,
+    ) -> None:
+        """Ledger every evaluation decision (guide §5)."""
+        try:
+            await self.storage.record_decision(
+                mint=coin.mint,
+                chain=coin.chain,
+                symbol=coin.symbol,
+                stage=stage,
+                reason=reason,
+                market_cap=coin.market_cap,
+                score_json=score_json,
+            )
+        except Exception:
+            logger.debug("Decision record failed for %s", coin.mint)
 
     async def _evaluate_and_alert(self, coin: CoinData) -> None:
         """Run detectors, score, and optionally send a Telegram alert."""
@@ -173,12 +214,14 @@ class BotApp:
         # ── Market-cap filter (strict) ──
         if coin.market_cap is None:
             logger.debug("Skipping %s — no market cap data", mint)
+            await self._record_decision(coin, "mc_missing", "no market cap data")
             return
         if coin.market_cap < self.settings.min_market_cap:
             logger.debug(
                 "Skipping %s — MC $%.0f < min $%.0f",
                 mint, coin.market_cap, self.settings.min_market_cap,
             )
+            await self._record_decision(coin, "mc_below_floor", f"mc {coin.market_cap:.0f}")
             return
 
         # ── NLP narrative analysis (must run before buying-activity check) ──
@@ -203,6 +246,7 @@ class BotApp:
         )
         if not has_verified_volume and not has_directional_buys:
             logger.debug("Skipping %s — no buying activity detected", mint)
+            await self._record_decision(coin, "no_buying_activity")
             return
 
         # ── Per-symbol cooldown (catch name copycats) ──
@@ -211,6 +255,7 @@ class BotApp:
         last = self._symbol_cooldowns.get(coin.symbol)
         if last and (now - last) < 60:
             logger.debug("Skipping %s — symbol %s on cooldown", mint, coin.symbol)
+            await self._record_decision(coin, "symbol_cooldown", coin.symbol)
             return
         self._symbol_cooldowns[coin.symbol] = now
 
@@ -223,13 +268,31 @@ class BotApp:
 
         if await self.storage.is_on_cooldown(mint, self.settings.alert_cooldown_seconds):
             logger.debug("Alert for %s is on cooldown", mint)
+            await self._record_decision(coin, "alert_cooldown")
             return
 
         await self.storage.record_backtest_snapshot(coin, score)
         await self.storage.save_alert(alert)
 
+        # Ledger the delivery decision with its actual suppression reason.
+        from memecoin_alert_bot.bot.formatter import should_send_alert
+
+        send_ok = should_send_alert(
+            alert,
+            mode=self.settings.subscription_mode,
+            min_confidence=self.settings.min_confidence,
+        )
+        if not send_ok:
+            if score.tier.value == "HIGH_RISK":
+                await self._record_decision(coin, "suppressed_high_risk", score_json=score.model_dump_json())
+            elif score.confidence < self.settings.min_confidence:
+                await self._record_decision(coin, "suppressed_confidence", score_json=score.model_dump_json())
+            else:
+                await self._record_decision(coin, "suppressed_pass", score_json=score.model_dump_json())
+
         sent = await self.telegram.send_alert(alert)
         if sent:
+            await self._record_decision(coin, "sent", score_json=score.model_dump_json())
             await self.storage.set_cooldown(mint)
             logger.info(
                 "Alert sent: %s (%s on %s) | %s | score=%.2f",
@@ -239,6 +302,63 @@ class BotApp:
                 score.verdict.value,
                 score.composite_score,
             )
+        elif not send_ok:
+            logger.debug(
+                "Alert suppressed: %s | tier=%s confidence=%.2f",
+                coin.symbol, score.tier.value, score.confidence,
+            )
+
+    async def _outcome_tracker_loop(self, interval_seconds: float = 60.0) -> None:
+        """Re-price alerted tokens at +5m/+15m/+1h/+24h for calibration (guide §5)."""
+        horizons = [5, 15, 60, 1440]
+        logger.info("Outcome tracker started (horizons: %s)", horizons)
+        while True:
+            try:
+                due = await self.storage.get_alerts_without_outcomes(horizons)
+                for item in due:
+                    mint = item["mint"]
+                    chain = "solana"
+                    price_alert = None
+                    mc_alert = None
+                    try:
+                        payload = json.loads(item["payload"]) if item["payload"] else {}
+                        coin_payload = payload.get("coin", {})
+                        chain = coin_payload.get("chain", "solana")
+                        price_alert = coin_payload.get("price")
+                        mc_alert = coin_payload.get("market_cap")
+                    except Exception:
+                        pass
+
+                    enrichment = await self.dexscreener.enrich_coin(
+                        mint, {}, chain=chain
+                    )
+                    price_now = enrichment.get("price")
+                    mc_now = enrichment.get("market_cap")
+                    if price_now is None and mc_now is None:
+                        # No market data (yet) — retry on a later pass.
+                        continue
+
+                    await self.storage.record_outcome(
+                        alert_id=item["alert_id"],
+                        mint=mint,
+                        horizon_min=item["horizon_min"],
+                        alert_at=item["generated_at"],
+                        price_alert=price_alert,
+                        price_horizon=price_now,
+                        mc_alert=mc_alert,
+                        mc_horizon=mc_now,
+                    )
+                    pct = None
+                    if price_alert and price_now and price_alert > 0:
+                        pct = (price_now / price_alert - 1) * 100
+                    logger.info(
+                        "Outcome: %s +%sm %+.1f%%", mint, item["horizon_min"], pct or 0.0
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Outcome tracker error")
+            await asyncio.sleep(interval_seconds)
 
     async def run(self) -> None:
         """Start the bot and run until shutdown."""
@@ -319,6 +439,7 @@ class BotApp:
 
         logger.info("Starting Memecoin Alert Bot")
         pumpportal_task = pumpportal.start()
+        outcome_task = asyncio.create_task(self._outcome_tracker_loop())
 
         try:
             await self._shutdown_event.wait()
@@ -332,6 +453,7 @@ class BotApp:
             if self._direct_discovery:
                 await self._direct_discovery.stop()
             telegram_task.cancel()
+            outcome_task.cancel()
             for t in robinhood_tasks:
                 t.cancel()
                 try:
@@ -340,6 +462,10 @@ class BotApp:
                     pass
             try:
                 await telegram_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await outcome_task
             except asyncio.CancelledError:
                 pass
             await self.telegram.stop()

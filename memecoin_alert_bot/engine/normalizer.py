@@ -34,8 +34,14 @@ def _parse_int(value: Any, default: int | None = None) -> int | None:
         return default
 
 
-def create_from_pumpportal(event: dict[str, Any]) -> CoinData:
-    """Create a baseline CoinData from a PumpPortal create event."""
+def create_from_pumpportal(event: dict[str, Any], sol_usd: float = 170.0) -> CoinData:
+    """Create a baseline CoinData from a PumpPortal create event.
+
+    PumpPortal reports ``marketCapSol`` in SOL units. Convert to USD so the
+    market-cap floor (USD) compares like with like; enrichment overwrites
+    with the provider's own USD market cap when available.
+    """
+    market_cap_sol = _parse_float(event.get("marketCapSol", 0)) or 0.0
     return CoinData(
         mint=event.get("mint") or event.get("token") or "",
         symbol=event.get("symbol", "UNKNOWN"),
@@ -43,7 +49,7 @@ def create_from_pumpportal(event: dict[str, Any]) -> CoinData:
         description=event.get("description", ""),
         dev_wallet=event.get("traderPublicKey", ""),
         price_sol=_parse_float(event.get("initialBuy", 0)),
-        market_cap=_parse_float(event.get("marketCapSol", 0)),
+        market_cap=market_cap_sol * sol_usd,
         age_seconds=0,
         sources={"pumpportal": event},
     )

@@ -255,11 +255,23 @@ def compute_confidence(coin: CoinData, gate_results: list) -> float:
     return round(c * 100, 1)
 
 
-def assign_tier(gates_passed: bool, q: float, r: float, c: float, risk: RiskLevel) -> Tier:
-    """Map (gates, Q, R, C) to a relative tier (guide §4)."""
+def assign_tier(
+    gates_passed: bool,
+    q: float,
+    r: float,
+    c: float,
+    risk: RiskLevel,
+    gates_unknown: bool = False,
+) -> Tier:
+    """Map (gates, Q, R, C) to a relative tier (guide §4).
+
+    A failed critical gate (or extreme risk) => HIGH_RISK. An **unknown**
+    critical gate never blocks delivery but caps the tier at STANDARD —
+    unverified tokens can never reach DIAMOND.
+    """
     if not gates_passed or risk == RiskLevel.EXTREME or r >= 80:
         return Tier.HIGH_RISK
-    if q >= 60 and r <= 40 and c >= 60:
+    if not gates_unknown and q >= 60 and r <= 40 and c >= 60:
         return Tier.DIAMOND
     if q >= 40 and r <= 60 and c >= 40:
         return Tier.STANDARD
@@ -297,12 +309,12 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
     composite = max(-1.0, min(1.0, composite))
 
     # Hard gates run before any high-conviction label (guide §3.2).
-    gates_passed, gate_results = gates.evaluate_gates(coin)
+    gates_passed, gate_results, gates_unknown = gates.evaluate_gates(coin)
 
     quality = compute_quality(coin, signals, p, l, h, n, velocity)
     risk_score = compute_risk(coin, b, risk)
     confidence = compute_confidence(coin, gate_results)
-    tier = assign_tier(gates_passed, quality, risk_score, confidence, risk)
+    tier = assign_tier(gates_passed, quality, risk_score, confidence, risk, gates_unknown)
 
     explanation = [
         f"Bundling risk {b:.2f} × {WEIGHTS['bundling']}",
@@ -338,6 +350,7 @@ def score_coin(coin: CoinData, signals: list[Signal]) -> ScoreResult:
         tier=tier,
         gates=gate_results,
         gates_passed=gates_passed,
+        gates_unknown=gates_unknown,
         invalidation=gates.build_invalidation(coin),
         breakdown=ScoreBreakdown(
             bundling=round(b, 3),

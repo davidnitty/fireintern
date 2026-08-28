@@ -17,6 +17,7 @@ from memecoin_alert_bot.data.robinhood import (
     WETH,
     RobinhoodChainClient,
     estimate_market_cap,
+    is_v3_pool_address,
 )
 from memecoin_alert_bot.engine.models import CoinData, SafetyInfo
 
@@ -96,12 +97,28 @@ class PonsIndexer:
             return None
 
         socials = token_meta.get("socials", {})
-        pool_addr = token_meta.get("pool_address") or (pool.hex() if isinstance(pool, bytes) else (str(pool) if pool else ""))
+        pool_raw = token_meta.get("pool_address") or (pool.hex() if isinstance(pool, bytes) else (str(pool) if pool else ""))
         pair_addr = pair_token.hex() if isinstance(pair_token, bytes) else (str(pair_token) if pair_token else WETH)
 
-        price_info = await self.client.fetch_pool_price(pool_addr, token, pair_addr)
+        # Only V3-style pool addresses are callable contracts. V4 pool IDs
+        # (32-byte) are kept for reference but must not be eth_call'd.
+        if is_v3_pool_address(pool_raw):
+            pool_addr: str | None = pool_raw
+        else:
+            pool_addr = None
+            logger.debug("Non-V3 pool id for %s — DexScreener fallback will price it", token)
 
-        swap_info = await self.client.fetch_recent_swaps(pool_addr, token, pair_addr)
+        price_info = (
+            await self.client.fetch_pool_price(pool_addr, token, pair_addr)
+            if pool_addr
+            else {"price": None, "liquidity": None}
+        )
+
+        swap_info = (
+            await self.client.fetch_recent_swaps(pool_addr, token, pair_addr)
+            if pool_addr
+            else {"buy_volume": 0.0, "sell_volume": 0.0, "buy_pressure": 0.5, "volume": 0.0, "buys": 0, "sells": 0}
+        )
 
         # Real coin age from launch block (0.25s block time on Arbitrum Orbit).
         launch_block = int(log.get("blockNumber", "0x0") or "0x0", 16)

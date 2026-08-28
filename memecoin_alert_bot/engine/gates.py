@@ -28,20 +28,35 @@ def _gate(gate: str, passed: bool | None, detail: str = "") -> GateResult:
     return GateResult(gate=gate, passed=bool(passed), status=status, detail=detail)
 
 
-def evaluate_gates(coin: CoinData) -> tuple[bool, list[GateResult]]:
-    """Return (all_critical_passed, list_of_gate_results)."""
+def evaluate_gates(coin: CoinData) -> tuple[bool, list[GateResult], bool]:
+    """Return (critical_passed, gate_results, has_unknown_critical).
+
+    Semantics (guide §3.2, refined):
+    - A **failed** critical gate blocks high-conviction tiers entirely
+      (HIGH_RISK).
+    - An **unknown** critical gate does not fail — but caps the tier at
+      STANDARD via ``has_unknown_critical`` so unverified tokens can never
+      reach DIAMOND.
+    - Venue evidence is a V3 pool address, a Solana bonding curve, OR
+      positive liquidity (covers Uniswap v4 pool IDs which are not
+      callable addresses).
+    """
     gates: list[GateResult] = []
 
+    has_venue = (
+        coin.pool_address is not None
+        or coin.chain == "solana"
+        or (coin.liquidity or 0) > 0
+    )
+
     # ── Identity ─
-    identity_ok = bool(coin.mint) and (coin.pool_address is not None or coin.chain == "solana")
-    gates.append(_gate("identity", identity_ok, "mint + venue present"))
+    gates.append(_gate("identity", bool(coin.mint) and has_venue, "mint + venue present"))
 
     # ── Freshness ──
     if coin.age_seconds is None:
         gates.append(_gate("freshness", None, "age unknown"))
     else:
-        fresh = coin.age_seconds <= MAX_AGE_SECONDS
-        gates.append(_gate("freshness", fresh, f"age {coin.age_seconds}s"))
+        gates.append(_gate("freshness", coin.age_seconds <= MAX_AGE_SECONDS, f"age {coin.age_seconds}s"))
 
     # ── Authority ──
     mint_auth = coin.safety.mint_authority_enabled
@@ -55,8 +70,7 @@ def evaluate_gates(coin: CoinData) -> tuple[bool, list[GateResult]]:
         )
 
     # ── Sellability / venue ──
-    sellable = coin.pool_address is not None or coin.chain == "solana"
-    gates.append(_gate("sellability", sellable, "exit venue identified" if sellable else "no exit venue"))
+    gates.append(_gate("sellability", has_venue, "exit venue identified" if has_venue else "no exit venue"))
 
     # ── Liquidity ──
     if coin.liquidity is None:
@@ -79,17 +93,15 @@ def evaluate_gates(coin: CoinData) -> tuple[bool, list[GateResult]]:
     )
 
     # ── Source agreement ──
-    # We treat presence of >=2 independent sources as agreement signal.
     source_count = sum(1 for v in coin.sources.values() if v is not None)
     gates.append(_gate("source_agreement", source_count >= 1, f"{source_count} sources"))
 
-    # Critical gates: a failure or unknown on these blocks high-conviction tiers.
     critical = ["identity", "authority", "sellability", "coordination"]
-    all_passed = all(
-        g.passed for g in gates if g.gate in critical and g.status != "passed"
-    ) and all(g.status != "failed" for g in gates if g.gate in critical)
+    critical_results = [g for g in gates if g.gate in critical]
+    failed = any(g.status == "failed" for g in critical_results)
+    unknown = any(g.status == "unknown" for g in critical_results)
 
-    return all_passed, gates
+    return (not failed), gates, unknown
 
 
 def build_invalidation(coin: CoinData) -> list[str]:

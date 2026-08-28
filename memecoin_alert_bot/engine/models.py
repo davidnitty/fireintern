@@ -120,6 +120,7 @@ class CoinData(BaseModel):
     dev_wallet: str = ""
     deployer: str | None = None
     dev_sol_balance: float | None = None
+    metadata_uri: str | None = None  # Metaplex/IPFS metadata JSON from create event
     social_links: dict[str, str] = Field(default_factory=dict)
     website: str | None = None
     twitter: str | None = None

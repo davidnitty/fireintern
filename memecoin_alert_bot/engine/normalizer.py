@@ -48,6 +48,7 @@ def create_from_pumpportal(event: dict[str, Any], sol_usd: float = 170.0) -> Coi
         name=event.get("name", ""),
         description=event.get("description", ""),
         dev_wallet=event.get("traderPublicKey", ""),
+        metadata_uri=event.get("uri"),
         price_sol=_parse_float(event.get("initialBuy", 0)),
         market_cap=market_cap_sol * sol_usd,
         age_seconds=0,

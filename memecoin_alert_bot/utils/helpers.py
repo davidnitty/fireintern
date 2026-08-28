@@ -98,3 +98,35 @@ def is_valid_api_key(key: str) -> bool:
         return False
     placeholder_prefixes = ("your_", "replace_", "changeme", "TODO", "xxx")
     return not key.strip().lower().startswith(placeholder_prefixes)
+
+
+async def fetch_metadata_json(
+    session: aiohttp.ClientSession,
+    uri: str,
+    timeout: int = 10,
+) -> dict[str, Any] | None:
+    """Fetch a Metaplex/IPFS metadata JSON document and return name/symbol.
+
+    Handles ``ipfs://`` URIs by rewriting them to a public gateway. Returns
+    None on any failure — callers must treat metadata as optional.
+    """
+    if not uri:
+        return None
+    url = uri
+    if url.startswith("ipfs://"):
+        url = "https://ipfs.io/ipfs/" + url[len("ipfs://"):].lstrip("/")
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json(content_type=None)
+    except Exception as exc:
+        logger.debug("Metadata fetch failed for %s: %s", uri, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {
+        "name": str(data.get("name") or "").strip(),
+        "symbol": str(data.get("symbol") or "").strip(),
+        "description": str(data.get("description") or "").strip(),
+    }

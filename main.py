@@ -138,6 +138,31 @@ class BotApp:
 
             return coin
 
+    @staticmethod
+    def _identity_incomplete(coin: CoinData) -> bool:
+        return not coin.symbol or coin.symbol == "UNKNOWN" or not coin.name
+
+    async def _fill_metadata_from_uri(self, coin: CoinData) -> None:
+        """Fill name/symbol from the create event's Metaplex metadata JSON.
+
+        PumpPortal events carry an IPFS ``uri``; on-chain scanners show the
+        name from this same document, so it is the authoritative fallback
+        when REST enrichment times out.
+        """
+        if not coin.metadata_uri or self.session is None or self.session.closed:
+            return
+        from memecoin_alert_bot.utils.helpers import fetch_metadata_json
+
+        meta = await fetch_metadata_json(self.session, coin.metadata_uri)
+        if not meta:
+            return
+        if meta.get("name") and not coin.name:
+            coin.name = meta["name"]
+        if meta.get("symbol") and (not coin.symbol or coin.symbol == "UNKNOWN"):
+            coin.symbol = meta["symbol"]
+        if meta.get("description") and not coin.description:
+            coin.description = meta["description"]
+
     async def _handle_new_token(self, event: dict[str, Any]) -> None:
         """Process a new Solana token event end-to-end."""
         mint = event.get("mint") or event.get("token")
@@ -147,6 +172,14 @@ class BotApp:
         try:
             coin = normalizer.create_from_pumpportal(event, sol_usd=self.settings.sol_usd)
             coin = await self._enrich_solana_coin(coin)
+
+            # Identity rescue: the scanner shows a name even when our REST
+            # enrichment times out, so pull it from the event's metadata URI
+            # and retry enrichment once before ever displaying UNKNOWN.
+            if self._identity_incomplete(coin):
+                await self._fill_metadata_from_uri(coin)
+            if self._identity_incomplete(coin):
+                coin = await self._enrich_solana_coin(coin)
 
             # Apply trade-tracker buy-pressure (Solana)
             trades = self._solana_trades.get(mint)

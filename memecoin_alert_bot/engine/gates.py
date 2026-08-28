@@ -83,7 +83,8 @@ def evaluate_gates(coin: CoinData) -> tuple[bool, list[GateResult], bool]:
     gates.append(_gate("deployer", deployer_known, "deployer identified" if deployer_known else "deployer unknown"))
 
     # ── Coordination / bundle ──
-    severe_bundle = coin.safety.bundled_pct > 40 or coin.top10_holder_pct > 70
+    # User rule: bundled tokens and top-10 concentration >= 50% must NOT alert.
+    severe_bundle = coin.safety.bundled_pct > 30 or coin.top10_holder_pct >= 50
     gates.append(
         _gate(
             "coordination",

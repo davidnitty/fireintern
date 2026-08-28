@@ -211,7 +211,15 @@ class BotApp:
         """Run detectors, score, and optionally send a Telegram alert."""
         mint = coin.mint
 
-        # ── Market-cap filter (strict) ──
+        # ── Identity filter: never alert on unnamed/UNKNOWN tokens ──
+        # This happens when enrichment failed (network timeouts) and means
+        # we know almost nothing reliable about the token.
+        if not coin.symbol or coin.symbol == "UNKNOWN":
+            logger.debug("Skipping %s — symbol unknown (enrichment incomplete)", mint)
+            await self._record_decision(coin, "unknown_identity", "symbol UNKNOWN")
+            return
+
+        # ── Market-cap filter (strict, USD) ──
         if coin.market_cap is None:
             logger.debug("Skipping %s — no market cap data", mint)
             await self._record_decision(coin, "mc_missing", "no market cap data")
@@ -222,6 +230,13 @@ class BotApp:
                 mint, coin.market_cap, self.settings.min_market_cap,
             )
             await self._record_decision(coin, "mc_below_floor", f"mc {coin.market_cap:.0f}")
+            return
+        if self.settings.max_market_cap > 0 and coin.market_cap > self.settings.max_market_cap:
+            logger.debug(
+                "Skipping %s — MC $%.0f > max $%.0f",
+                mint, coin.market_cap, self.settings.max_market_cap,
+            )
+            await self._record_decision(coin, "mc_above_ceiling", f"mc {coin.market_cap:.0f}")
             return
 
         # ── NLP narrative analysis (must run before buying-activity check) ──

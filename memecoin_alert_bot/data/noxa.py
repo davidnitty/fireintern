@@ -148,9 +148,14 @@ class NoxaIndexer:
             token = await self._get_token_address(index)
             if not token:
                 continue
-            coin = await self._process_token(token)
-            if coin:
-                await self._handle(coin)
+            try:
+                coin = await self._process_token(token)
+                if coin:
+                    await self._handle(coin)
+            except Exception as exc:
+                # One bad token must never stall the registry cursor;
+                # otherwise this indexer reprocesses the whole backlog forever.
+                logger.warning("Skipping Noxa token %s (index %d): %s", token, index, exc)
         return count
 
     async def run(

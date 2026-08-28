@@ -86,3 +86,10 @@ def test_pons_indexer_processes_mock_log():
     assert coin.chain == "robinhood"
     assert coin.symbol == "TEST"
     assert coin.deployer == deployer.lower()
+
+
+def test_owner_selector_registered():
+    """Regression: missing 'owner' selector crashed Noxa/Pons metadata fetch."""
+    from memecoin_alert_bot.data.robinhood import FUNCTION_SELECTORS
+    assert "owner" in FUNCTION_SELECTORS
+    assert FUNCTION_SELECTORS["owner"] == "8da5cb5b"

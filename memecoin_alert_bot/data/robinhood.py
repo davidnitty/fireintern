@@ -42,6 +42,7 @@ FUNCTION_SELECTORS = {
     "slot0": Web3.keccak(text="slot0()")[:4].hex(),
     "token0": Web3.keccak(text="token0()")[:4].hex(),
     "token1": Web3.keccak(text="token1()")[:4].hex(),
+    "owner": Web3.keccak(text="owner()")[:4].hex(),
 }
 
 

@@ -80,6 +80,14 @@ CREATE TABLE IF NOT EXISTS alert_outcomes (
     UNIQUE(alert_id, horizon_min)
 );
 
+CREATE TABLE IF NOT EXISTS moon_state (
+    mint TEXT PRIMARY KEY,
+    baseline_mc REAL,
+    baseline_price REAL,
+    last_multiple REAL DEFAULT 1.0,
+    updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS chain_state (
     chain TEXT PRIMARY KEY,
     last_block INTEGER,
@@ -378,6 +386,71 @@ class Storage:
         await self._connection.execute(
             "UPDATE alert_outcomes SET update_sent = 1 WHERE alert_id = ?",
             (alert_id,),
+        )
+        await self._connection.commit()
+
+    # ── Cumulative moon state (per mint, not per alert) ─────────────────
+
+    async def get_moon_state(self, mint: str) -> dict[str, Any] | None:
+        async with self._connection.execute(
+            "SELECT mint, baseline_mc, baseline_price, last_multiple FROM moon_state WHERE mint = ?",
+            (mint,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def ensure_moon_state(
+        self, mint: str, mc: float | None, price: float | None
+    ) -> dict[str, Any]:
+        """Get or create the cumulative moon baseline for a mint.
+
+        On first creation the baseline is anchored to the **earliest alert**
+        for this mint (so re-alerts during a pump never reset the multiple),
+        falling back to the provided values when no prior alert exists.
+        """
+        state = await self.get_moon_state(mint)
+        if state:
+            return state
+
+        baseline_mc = mc
+        baseline_price = price
+        async with self._connection.execute(
+            "SELECT payload FROM alerts WHERE mint = ? ORDER BY generated_at ASC, id ASC LIMIT 1",
+            (mint,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row and row["payload"]:
+            try:
+                payload = json.loads(row["payload"])
+                coin_payload = payload.get("coin", {})
+                baseline_mc = coin_payload.get("market_cap") or baseline_mc
+                baseline_price = coin_payload.get("price") or baseline_price
+            except Exception:
+                pass
+
+        await self._connection.execute(
+            """
+            INSERT INTO moon_state (mint, baseline_mc, baseline_price, last_multiple, updated_at)
+            VALUES (?, ?, ?, 1.0, ?)
+            ON CONFLICT(mint) DO NOTHING
+            """,
+            (mint, baseline_mc, baseline_price, datetime.now(timezone.utc).isoformat()),
+        )
+        await self._connection.commit()
+        return await self.get_moon_state(mint) or {
+            "mint": mint,
+            "baseline_mc": baseline_mc,
+            "baseline_price": baseline_price,
+            "last_multiple": 1.0,
+        }
+
+    async def set_moon_multiple(self, mint: str, multiple: float) -> None:
+        """Advance the last-announced cumulative multiple for a mint."""
+        await self._connection.execute(
+            """
+            UPDATE moon_state SET last_multiple = ?, updated_at = ? WHERE mint = ?
+            """,
+            (multiple, datetime.now(timezone.utc).isoformat(), mint),
         )
         await self._connection.commit()
 

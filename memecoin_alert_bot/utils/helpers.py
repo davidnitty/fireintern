@@ -100,6 +100,20 @@ def is_valid_api_key(key: str) -> bool:
     return not key.strip().lower().startswith(placeholder_prefixes)
 
 
+def next_moon_threshold(update_pct: float, last_multiple: float) -> float:
+    """Cumulative multiple required for the next moon update.
+
+    First update fires at ``1 + update_pct%`` above the original call
+    (e.g. 50% => 1.5X). Every subsequent update fires when the token
+    **doubles** from the last announced level (20.5X -> 41X -> 82X ...),
+    matching the expected cumulative behaviour.
+    """
+    first = 1.0 + update_pct / 100.0
+    if last_multiple <= 1.0:
+        return first
+    return last_multiple * 2.0
+
+
 async def fetch_metadata_json(
     session: aiohttp.ClientSession,
     uri: str,

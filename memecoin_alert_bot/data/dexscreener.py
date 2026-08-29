@@ -41,8 +41,19 @@ class DexScreenerClient:
         data = await fetch_json(self.session, f"{BASE_URL}/boosts/top/v1", timeout=15)
         return data if isinstance(data, list) else []
 
+    async def get_latest_profiles(self) -> list[dict[str, Any]]:
+        """Fetch the latest token profiles across all chains.
+
+        This is DexScreener's official new-token feed — the primary
+        discovery source for fresh tokens on a chain.
+        """
+        data = await fetch_json(
+            self.session, "https://api.dexscreener.com/token-profiles/latest/v1", timeout=15
+        )
+        return data if isinstance(data, list) else []
+
     async def get_new_pairs(self, chain_slug: str, max_age_minutes: int = 30) -> list[dict[str, Any]]:
-        """Discover recently created pairs on a chain via DexScreener search.
+        """Fetch recently created pairs on a chain via DexScreener search.
 
         Uses the public search endpoint sorted by pair age; returns raw pair
         objects for the caller to filter (liquidity floor, quote token, etc.).
@@ -65,7 +76,8 @@ class DexScreenerClient:
 
     async def enrich_coin(self, mint: str, base: dict[str, Any], chain: str = "solana") -> dict[str, Any]:
         """Return merged metadata keyed by the fields CoinData expects."""
-        chain_slug = {"robinhood": "robinhoodchain"}.get(chain, chain)
+        # DexScreener's chainId for Robinhood Chain is literally "robinhood".
+        chain_slug = {"robinhood": "robinhood"}.get(chain, chain)
         result = {
             "volume_24h": None,
             "volume_5m": None,

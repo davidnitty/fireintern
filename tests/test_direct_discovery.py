@@ -13,30 +13,42 @@ from memecoin_alert_bot.engine.models import CoinData
 
 
 def test_slug_matches_dexscreener_chain_id():
-    assert DEXSCREENER_SLUG == "robinhoodchain"
+    """Regression: DexScreener's chainId is 'robinhood' (NOT 'robinhoodchain')."""
+    assert DEXSCREENER_SLUG == "robinhood"
     assert "robinhood" in DEFAULT_RPC
 
 
+def _pair(mint="0x547C0DB20565905f00e1c0FF6745AAA7D273b27A", liq=77_600, symbol="DOG"):
+    import time
+
+    return {
+        "pairAddress": "0x" + "a" * 64,  # v4 pool ID (not an address)
+        "chainId": "robinhood",
+        "baseToken": {"address": mint, "symbol": symbol, "name": f"{symbol} Token"},
+        "quoteToken": {"address": "0x" + "b" * 40},
+        "liquidity": {"usd": liq},
+        "volume": {"m5": 2_800, "h1": 169_000, "h24": 1_310_000},
+        "txns": {"m5": {"buys": 7, "sells": 11}, "h1": {"buys": 246, "sells": 253}},
+        "priceChange": {"m5": 1.1, "h1": -33},
+        "priceUsd": "0.000163",
+        "marketCap": 163_000,
+        "pairCreatedAt": int(time.time() * 1000) - 10 * 60_000,  # 10 min old
+        "info": {"socials": [{"type": "twitter", "url": "https://x.com/dog"}]},
+    }
+
+
 @pytest.mark.asyncio
-async def test_direct_discovery_emits_direct_deployments():
+async def test_direct_discovery_emits_via_profile_feed():
     """A directly-deployed token (not Pons/Noxa) must be discovered."""
     dexscreener = AsyncMock()
-    dexscreener.get_new_pairs = AsyncMock(
+    dexscreener.get_latest_profiles = AsyncMock(
         return_value=[
-            {
-                "pairAddress": "0x" + "a" * 64,  # v4 pool ID (not an address)
-                "baseToken": {"address": "0x547C0DB20565905f00e1c0FF6745AAA7D273b27A", "symbol": "DOG", "name": "DoggyStyle"},
-                "quoteToken": {"address": "0x" + "b" * 40},
-                "liquidity": {"usd": 77_600},
-                "volume": {"m5": 2_800, "h1": 169_000, "h24": 1_310_000},
-                "txns": {"m5": {"buys": 7, "sells": 11}, "h1": {"buys": 246, "sells": 253}},
-                "priceChange": {"m5": 1.1, "h1": -33},
-                "priceUsd": "0.000163",
-                "marketCap": 163_000,
-                "pairCreatedAt": 1_790_000_000_000,
-                "info": {"socials": [{"type": "twitter", "url": "https://x.com/dog"}]},
-            }
+            {"chainId": "robinhood", "tokenAddress": "0x547C0DB20565905f00e1c0FF6745AAA7D273b27A"},
+            {"chainId": "solana", "tokenAddress": "SolMint111111111"},  # filtered out
         ]
+    )
+    dexscreener.fetch_token_pairs = AsyncMock(
+        return_value={"pairs": [_pair()]}
     )
     robinhood = AsyncMock()
     robinhood.fetch_token_metadata = AsyncMock(
@@ -55,7 +67,7 @@ async def test_direct_discovery_emits_direct_deployments():
 
     coins: list[CoinData] = []
     indexer = DirectDiscoveryIndexer(
-        dexscreener, robinhood, token_handler=coins.append, max_age_minutes=30
+        dexscreener, robinhood, token_handler=coins.append
     )
     emitted = await indexer.poll_once()
 
@@ -74,14 +86,11 @@ async def test_direct_discovery_emits_direct_deployments():
 @pytest.mark.asyncio
 async def test_direct_discovery_skips_dust_pools():
     dexscreener = AsyncMock()
-    dexscreener.get_new_pairs = AsyncMock(
-        return_value=[
-            {
-                "pairAddress": "0x" + "c" * 40,
-                "baseToken": {"address": "0x" + "d" * 40, "symbol": "DUST"},
-                "liquidity": {"usd": 50},
-            }
-        ]
+    dexscreener.get_latest_profiles = AsyncMock(
+        return_value=[{"chainId": "robinhood", "tokenAddress": "0x" + "d" * 40}]
+    )
+    dexscreener.fetch_token_pairs = AsyncMock(
+        return_value={"pairs": [_pair(mint="0x" + "d" * 40, liq=50, symbol="DUST")]}
     )
     robinhood = AsyncMock()
     coins: list[CoinData] = []
@@ -95,13 +104,13 @@ async def test_direct_discovery_skips_dust_pools():
 
 @pytest.mark.asyncio
 async def test_direct_discovery_dedupes_seen_mints():
-    pair = {
-        "pairAddress": "0x" + "e" * 40,
-        "baseToken": {"address": "0x" + "f" * 40, "symbol": "REPEAT"},
-        "liquidity": {"usd": 20_000},
-    }
     dexscreener = AsyncMock()
-    dexscreener.get_new_pairs = AsyncMock(return_value=[pair])
+    dexscreener.get_latest_profiles = AsyncMock(
+        return_value=[{"chainId": "robinhood", "tokenAddress": "0x" + "f" * 40}]
+    )
+    dexscreener.fetch_token_pairs = AsyncMock(
+        return_value={"pairs": [_pair(mint="0x" + "f" * 40, symbol="REPEAT", liq=20_000)]}
+    )
     robinhood = AsyncMock()
     robinhood.fetch_token_metadata = AsyncMock(
         return_value={"name": "Repeat", "symbol": "REPEAT", "socials": {}}
@@ -113,3 +122,22 @@ async def test_direct_discovery_dedupes_seen_mints():
     await indexer.poll_once()
     await indexer.poll_once()
     assert len(coins) == 1
+
+
+@pytest.mark.asyncio
+async def test_direct_discovery_ignores_other_chains_in_pairs():
+    """Pairs on other chains must not be emitted for a robinhood profile."""
+    dexscreener = AsyncMock()
+    dexscreener.get_latest_profiles = AsyncMock(
+        return_value=[{"chainId": "robinhood", "tokenAddress": "0x" + "9" * 40}]
+    )
+    other = _pair(mint="0x" + "9" * 40, liq=500_000, symbol="OTHER")
+    other["chainId"] = "solana"
+    dexscreener.fetch_token_pairs = AsyncMock(return_value={"pairs": [other]})
+    robinhood = AsyncMock()
+    coins: list[CoinData] = []
+    indexer = DirectDiscoveryIndexer(
+        dexscreener, robinhood, token_handler=coins.append
+    )
+    emitted = await indexer.poll_once()
+    assert emitted == 0

@@ -75,10 +75,20 @@ class PumpPortalClient:
         }
 
     async def connect(self, subscribe_trades: bool = False) -> None:
-        """Connect and subscribe to token events. Reconnect on failure."""
+        """Connect and subscribe to token events. Reconnect with backoff."""
+        attempt = 0
         while not self._stop_event.is_set():
+            attempt += 1
             try:
-                async with websockets.connect(PUMPPORTAL_WS) as ws:
+                # Patient handshake: the public endpoint can take >10s to
+                # accept a connection; 30s avoids handshake-timeout loops.
+                async with websockets.connect(
+                    PUMPPORTAL_WS,
+                    open_timeout=30,
+                    ping_interval=20,
+                    ping_timeout=20,
+                ) as ws:
+                    attempt = 0
                     logger.info("Connected to PumpPortal WebSocket")
                     # Subscribe to new token events
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
@@ -102,7 +112,9 @@ class PumpPortalClient:
                 logger.warning("PumpPortal connection closed, reconnecting...")
             except Exception as exc:
                 logger.warning("PumpPortal error: %s", exc)
-            await asyncio.sleep(5)
+            # Backoff: 5s, 10s, 20s, 40s, capped at 60s. Reset on success.
+            delay = min(60.0, 5.0 * (2 ** min(attempt - 1, 4)))
+            await asyncio.sleep(delay)
 
     def start(self, subscribe_trades: bool | None = None) -> asyncio.Task:
         """Start the WebSocket listener as a background task."""

@@ -93,111 +93,54 @@ def _short_addr(addr: str) -> str:
 # ── Main formatter ────────────────────────────────────────────────────────
 
 
+def _gmgn_url(coin) -> str | None:
+    """GMGN tracker link; only chains GMGN actually lists."""
+    if coin.chain == "solana":
+        return f"https://gmgn.ai/sol/token/{coin.mint}"
+    return None  # Robinhood Chain is not on GMGN yet
+
+
+def _fmt_mc_compact(value: float | None) -> str:
+    """Market cap like 10K, 163K, 1.3M (matches the sample card)."""
+    if value is None:
+        return "N/A"
+    if value >= 1_000_000:
+        text = f"{value / 1_000_000:.1f}M"
+    elif value >= 1_000:
+        text = f"{value / 1_000:.1f}K"
+    else:
+        text = f"{value:.0f}"
+    return text.rstrip("0").rstrip(".").replace(".0K", "K").replace(".0M", "M")
+
+
 def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
-    """Build compact Markdown text and inline keyboard for an alert."""
+    """Build the minimal 'Intern Signal Call' card."""
     coin = alert.coin
-    score = alert.score
 
-    chain_badge = CHAIN_BADGE.get(coin.chain, "🌐")
-    v_emoji = VERDICT_EMOJI.get(score.verdict, "ℹ️")
-    r_emoji = RISK_EMOJI.get(score.risk, "🟢")
+    display_name = coin.name or coin.symbol or "Unknown"
+    age = _fmt_age(coin.age_seconds).upper()
 
-    # Buy / sell counts (best effort).
-    buys = int(coin.buy_volume_1h or 0)
-    sells = int(coin.sell_volume_1h or 0)
-    total_bs = buys + sells
-    buy_pct = int((buys / total_bs * 100)) if total_bs > 0 else 50
+    lines: list[str] = [
+        "Intern Signal Call",
+        "",
+        f"🚀 Token Name: {display_name}",
+        f"💲 Ticker: {coin.symbol}",
+        f"📊 Market Cap: {_fmt_mc_compact(coin.market_cap)}",
+        f"⏱ Age: {age}",
+        "",
+        "🔗 Contract Address:",
+        f"`{coin.mint}`",
+    ]
 
-    lines: list[str] = []
-
-    # ── Header (matches reference image) ─────────────────────────────────
-    lines.append(f"🟩 {coin.name} (${coin.symbol})")
-    lines.append(f"✏️ {r_emoji} 🌱{_fmt_age(coin.age_seconds)} 👀{coin.holders or 0}")
-    lines.append("")
-
-    # ── Token Stats (tree connectors) ────────────────────────────────────
-    lines.append("📊 Token Stats")
-    lines.append(f"├─ MC:   {format_currency(coin.market_cap)}")
-    lines.append(f"├─ ATH:  {format_currency(coin.market_cap)}")
-    lines.append(f"├─ USD:  {_fmt_price(coin.price)}")
-    lines.append(f"├─ LIQ:  {format_currency(coin.liquidity)}")
-    lines.append(f"├─ VOL:  {format_currency(coin.volume_24h)} (24h)")
-    lines.append(f"├─ 1H:   B {buys} / S {sells} ({buy_pct}%)")
-    if coin.flow_data_quality == "verified_usd" and coin.vl_ratio_1h is not None:
-        lines.append(f"├─ V/L:  {coin.vl_ratio_1h:.1f}x")
-        flow = coin.flow_label if coin.flow_label != "-" else "unknown"
-        speed = f" (S× {coin.swap_speed:.1f})" if coin.swap_speed is not None else ""
-        lines.append(f"├─ FLOW: {flow}{speed}")
-    elif coin.flow_data_quality != "unknown":
-        lines.append("├─ FLOW: directional only")
-    else:
-        lines.append("├─ FLOW: unknown")
-    lines.append(f"├─ HLD:  {coin.holders or 'N/A'}")
-    lines.append(f"├─ P:    {_short_addr(coin.mint)} 🦄")
-    lines.append(f"└─ DEV:  {_short_addr(coin.dev_wallet or coin.deployer or '')}")
-    lines.append("")
-
-    # ── Socials ──────────────────────────────────────────────────────────
-    lines.append("🔗 Socials")
-    social_parts = []
-    if coin.telegram or coin.social_links.get("telegram"):
-        social_parts.append("TG")
-    if coin.website or coin.social_links.get("website"):
-        social_parts.append("Web")
-    if coin.twitter or coin.social_links.get("twitter"):
-        social_parts.append("𝕏")
-    social_parts.append("About")
-    lines.append(f"└─ {' • '.join(social_parts)}")
-    lines.append("")
-
-    # ── Audit (score /10, LP ratio, DEX status) ──────────────────────────
-    lines.append(f"🛡 Audit [{_audit_score(score)}/10]")
-    lines.append(f"🩸 LP Ratio [{_lp_ratio(coin)}]")
-    venue = "DEX" if coin.pool_address else ("CURVE" if coin.chain == "solana" else "DEX")
-    paid = "PAID" if coin.safety.lp_locked else "NOT PAID"
-    lines.append(f"👹 {venue} [{paid}] [info]")
-    lines.append("")
-
-    # ── Signal ticker strip ──────────────────────────────────────────────
-    if alert.signals:
-        strip = "•".join(s.signal_type.label.split()[0][:3].upper() for s in alert.signals[:8])
-        lines.append(strip)
-        lines.append("")
-
-    # ── Scores (Q / R / C) + tier (guide §4) ─────────────────────────────
-    lines.append(f"{score.tier.emoji} {score.tier.label}")
-    lines.append(f"Q {score.quality:.0f} • R {score.risk_score:.0f} • C {score.data_confidence:.0f}")
-    lines.append(f"🎯 {v_emoji} {score.verdict.value} {r_emoji}")
-    lines.append("")
-
-    # ── Full contract address at bottom ──────────────────────────────────
-    lines.append(f"`{coin.mint}`")
-
-    # ── Inline keyboard ──────────────────────────────────────────────────
     keyboard: list[list[InlineKeyboardButton]] = []
+    row = [InlineKeyboardButton("DEX", url=coin.dexscreener_url)]
+    gmgn = _gmgn_url(coin)
+    if gmgn:
+        row.append(InlineKeyboardButton("GMGN", url=gmgn))
+    keyboard.append(row)
 
-    row1 = []
-    if coin.chain == "robinhood":
-        row1.append(InlineKeyboardButton("🦄 Buy", url=coin.buy_url))
-    else:
-        row1.append(InlineKeyboardButton("🚀 Buy", url=coin.buy_url))
-    row1.append(InlineKeyboardButton("📊 Chart", url=coin.dexscreener_url))
-    keyboard.append(row1)
-
-    social_row = []
-    web = coin.website or coin.social_links.get("website")
-    if web:
-        social_row.append(InlineKeyboardButton("🌐 Web", url=web))
-    tw = coin.twitter or coin.social_links.get("twitter")
-    if tw:
-        social_row.append(InlineKeyboardButton("𝕏 Twitter", url=tw))
-    tg = coin.telegram or coin.social_links.get("telegram")
-    if tg:
-        social_row.append(InlineKeyboardButton("💬 TG", url=tg))
-    if social_row:
-        keyboard.append(social_row)
-
-    return "\n".join(lines), InlineKeyboardMarkup(keyboard)
+    newline = chr(10)
+    return newline.join(lines), InlineKeyboardMarkup(keyboard)
 
 
 def should_send_alert(alert: Alert, mode: str = "all", min_confidence: float = 0.2) -> bool:

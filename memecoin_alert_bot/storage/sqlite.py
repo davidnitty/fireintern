@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS alert_outcomes (
     mc_horizon REAL,
     pct_change REAL,
     captured_at TEXT,
+    update_sent INTEGER DEFAULT 0,
     UNIQUE(alert_id, horizon_min)
 );
 
@@ -99,6 +100,14 @@ class Storage:
         self._connection = await aiosqlite.connect(self.db_path)
         self._connection.row_factory = aiosqlite.Row
         await self._connection.executescript(SCHEMA)
+        # Light migrations for databases created before a column existed.
+        for statement in (
+            "ALTER TABLE alert_outcomes ADD COLUMN update_sent INTEGER DEFAULT 0",
+        ):
+            try:
+                await self._connection.execute(statement)
+            except Exception:
+                pass  # column already exists
         await self._connection.commit()
         logger.info("SQLite storage initialized at %s", self.db_path)
 
@@ -328,8 +337,8 @@ class Storage:
         price_horizon: float | None,
         mc_alert: float | None,
         mc_horizon: float | None,
-    ) -> None:
-        """Store one horizon outcome for an alert."""
+    ) -> float | None:
+        """Store one horizon outcome for an alert. Returns the pct change."""
         pct = None
         if price_alert and price_horizon and price_alert > 0:
             pct = (price_horizon / price_alert - 1) * 100
@@ -352,6 +361,23 @@ class Storage:
                 pct,
                 datetime.now(timezone.utc).isoformat(),
             ),
+        )
+        await self._connection.commit()
+        return pct
+
+    async def moon_update_sent(self, alert_id: int) -> bool:
+        """True when a follow-up moon update was already sent for this alert."""
+        async with self._connection.execute(
+            "SELECT 1 FROM alert_outcomes WHERE alert_id = ? AND update_sent = 1 LIMIT 1",
+            (alert_id,),
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+    async def mark_moon_update_sent(self, alert_id: int) -> None:
+        """Flag every horizon row of this alert so the update sends only once."""
+        await self._connection.execute(
+            "UPDATE alert_outcomes SET update_sent = 1 WHERE alert_id = ?",
+            (alert_id,),
         )
         await self._connection.commit()
 

@@ -402,6 +402,45 @@ class BotApp:
                     logger.info(
                         "Outcome: %s +%sm %+.1f%%", mint, item["horizon_min"], pct or 0.0
                     )
+
+                    # ── Moon update: feedback when an alerted token pumps ──
+                    if (
+                        pct is not None
+                        and pct >= self.settings.moon_update_pct
+                        and not await self.storage.moon_update_sent(item["alert_id"])
+                    ):
+                        symbol = "TOKEN"
+                        try:
+                            payload = json.loads(item["payload"]) if item["payload"] else {}
+                            symbol = payload.get("coin", {}).get("symbol") or symbol
+                        except Exception:
+                            pass
+                        # The sample card shows market-cap movement; prefer MC.
+                        if mc_alert and mc_now and mc_alert > 0:
+                            multiple = mc_now / mc_alert
+                            mc_from, mc_to = mc_alert, mc_now
+                        elif price_alert and price_now:
+                            multiple = price_now / price_alert
+                            mc_from = mc_to = None
+                        else:
+                            multiple = 0.0
+                        if multiple > 0:
+                            sent = await self.telegram.send_moon_update(
+                                symbol, multiple, mc_from, mc_to
+                            )
+                            await self.storage.mark_moon_update_sent(item["alert_id"])
+                            if sent:
+                                coin_like = CoinData(
+                                    mint=mint, chain=chain, symbol=symbol, market_cap=mc_now
+                                )
+                                await self._record_decision(
+                                    coin_like,
+                                    "moon_update",
+                                    f"{multiple:.1f}X at +{item['horizon_min']}m",
+                                )
+                                logger.info(
+                                    "Moon update sent: %s up %.1fX", symbol, multiple
+                                )
             except asyncio.CancelledError:
                 raise
             except Exception:

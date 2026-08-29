@@ -170,6 +170,50 @@ class TelegramBot:
             parse_mode="Markdown",
         )
 
+    async def send_moon_update(
+        self,
+        symbol: str,
+        multiple: float,
+        mc_from: float | None,
+        mc_to: float | None,
+    ) -> bool:
+        """Send the follow-up 'is up NX' price feedback card."""
+        if not self._ready or self.application is None:
+            return False
+
+        multiple = max(multiple, 1.0)
+        x_text = f"{multiple:.1f}X"
+
+        def _money(v: float | None) -> str:
+            if v is None:
+                return "?"
+            if v >= 1_000_000:
+                s = f"{v/1_000_000:.1f}M"
+            elif v >= 1_000:
+                s = f"{v/1_000:.1f}K"
+            else:
+                s = f"{v:.0f}"
+            return "$" + s.replace(".0K", "K").replace(".0M", "M")
+
+        money = f"{_money(mc_from)} —> {_money(mc_to)} 💵" if mc_from and mc_to else ""
+
+        text = (
+            f"📈 {symbol} is up {x_text} 📈\n"
+            f"from ⚡️ Fire Intern Signal\n\n"
+            f"{money}\n\n"
+            f"💸💸💸💸"
+        ).strip()
+
+        chat_ids = self.settings.get_chat_ids()
+        sent_any = False
+        for chat_id in chat_ids:
+            try:
+                await self.application.bot.send_message(chat_id=chat_id, text=text)
+                sent_any = True
+            except Exception:
+                logger.exception("Failed to send moon update to %s", chat_id)
+        return sent_any
+
     # ------------------------------------------------------------------
     # Alert delivery
     # ------------------------------------------------------------------

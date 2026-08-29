@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     max_market_cap: float = Field(default=0, alias="MAX_MARKET_CAP")
     min_volume_24h: float = Field(default=0, alias="MIN_VOLUME_24H")
     sol_usd: float = Field(default=170.0, alias="SOL_USD")
+    # Send a follow-up "is up NX" update when an alerted token gains this %.
+    moon_update_pct: float = Field(default=50.0, alias="MOON_UPDATE_PCT")
     subscription_mode: str = Field(default="all", alias="SUBSCRIPTION_MODE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 

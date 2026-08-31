@@ -49,6 +49,7 @@ class BotApp:
         self._pons_indexer: PonsIndexer | None = None
         self._noxa_indexer: NoxaIndexer | None = None
         self._direct_discovery: DirectDiscoveryIndexer | None = None
+        self._solana_discovery: DirectDiscoveryIndexer | None = None
         self._symbol_cooldowns: dict[str, float] = {}  # symbol -> last alert timestamp
 
     async def _init_clients(self) -> None:
@@ -210,6 +211,22 @@ class BotApp:
         except Exception as exc:
             logger.debug("Robinhood Dex fallback failed for %s: %s", coin.mint, exc)
         return coin
+
+    async def _handle_direct_solana_token(self, coin: CoinData) -> None:
+        """Solana fallback discovery (DexScreener feed) — PumpPortal-independent."""
+        try:
+            coin = await self._enrich_solana_coin(coin)
+
+            trades = self._solana_trades.get(coin.mint)
+            if trades:
+                total = trades.get("buy", 0) + trades.get("sell", 0)
+                if total > 0:
+                    coin.buy_pressure = trades.get("buy", 0) / total
+                    if coin.volume_24h is None:
+                        coin.volume_24h = total * 50
+            await self._evaluate_and_alert(coin)
+        except Exception:
+            logger.exception("Failed to process direct Solana token %s", coin.mint)
 
     async def _handle_robinhood_token(self, coin: CoinData) -> None:
         """Process a Robinhood Chain token discovered by Pons, Noxa, or direct discovery."""
@@ -531,6 +548,17 @@ class BotApp:
             )
             robinhood_tasks.append(self._direct_discovery.start())
 
+            # Solana fallback discovery via the same DexScreener feed —
+            # keeps working when the PumpPortal WebSocket is unreachable.
+            self._solana_discovery = DirectDiscoveryIndexer(
+                self.dexscreener,
+                None,
+                token_handler=self._handle_direct_solana_token,
+                chain_slug="solana",
+                chain_name="solana",
+            )
+            robinhood_tasks.append(self._solana_discovery.start(interval_seconds=15.0))
+
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -553,6 +581,8 @@ class BotApp:
                 await self._noxa_indexer.stop()
             if self._direct_discovery:
                 await self._direct_discovery.stop()
+            if self._solana_discovery:
+                await self._solana_discovery.stop()
             telegram_task.cancel()
             outcome_task.cancel()
             for t in robinhood_tasks:

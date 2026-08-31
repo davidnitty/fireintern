@@ -37,14 +37,20 @@ class DirectDiscoveryIndexer:
     def __init__(
         self,
         dexscreener,  # DexScreenerClient
-        robinhood: RobinhoodChainClient,
+        robinhood: RobinhoodChainClient | None = None,
         token_handler: Callable[[CoinData], Any] | None = None,
         max_age_minutes: int = 180,
+        chain_slug: str = DEXSCREENER_SLUG,
+        chain_name: str = "robinhood",
     ):
         self.dexscreener = dexscreener
         self.robinhood = robinhood
         self.token_handler = token_handler
         self.max_age_minutes = max_age_minutes
+        self.chain_slug = chain_slug
+        self.chain_name = chain_name
+        # EVM ownership lookup only applies to Robinhood Chain tokens.
+        self.use_evm_meta = chain_name == "robinhood"
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._seen_pairs: set[str] = set()
@@ -71,7 +77,7 @@ class DirectDiscoveryIndexer:
         mints = [
             p.get("tokenAddress")
             for p in profiles
-            if p.get("chainId") == DEXSCREENER_SLUG and p.get("tokenAddress")
+            if p.get("chainId") == self.chain_slug and p.get("tokenAddress")
         ]
         if not mints:
             return 0
@@ -98,10 +104,10 @@ class DirectDiscoveryIndexer:
         return emitted
 
     async def _best_pair(self, mint: str) -> dict[str, Any] | None:
-        """Highest-liquidity robinhood pair for the mint, with filters applied."""
+        """Highest-liquidity pair on this chain for the mint, filtered."""
         data = await self.dexscreener.fetch_token_pairs(mint)
         pairs = data.get("pairs", []) if data else []
-        chain_pairs = [p for p in pairs if p.get("chainId") == DEXSCREENER_SLUG]
+        chain_pairs = [p for p in pairs if p.get("chainId") == self.chain_slug]
         if not chain_pairs:
             return None
         best = max(
@@ -138,7 +144,9 @@ class DirectDiscoveryIndexer:
             age_seconds = max(0, int(import_time() - int(created_ms) / 1000))
 
         # On-chain verification: ownership via generic ERC-20 owner().
-        meta = await self.robinhood.fetch_token_metadata(mint) or {}
+        meta: dict[str, Any] = {}
+        if self.use_evm_meta and self.robinhood is not None:
+            meta = await self.robinhood.fetch_token_metadata(mint) or {}
         socials = meta.get("socials", {}) or {}
         if info.get("socials"):
             for s in info["socials"]:
@@ -148,8 +156,8 @@ class DirectDiscoveryIndexer:
 
         coin = CoinData(
             mint=mint,
-            chain="robinhood",
-            chain_id=ROBINHOOD_CHAIN_ID,
+            chain=self.chain_name,
+            chain_id=ROBINHOOD_CHAIN_ID if self.chain_name == "robinhood" else None,
             symbol=base.get("symbol") or meta.get("symbol") or "UNKNOWN",
             name=base.get("name") or meta.get("name") or "",
             description=meta.get("description", ""),

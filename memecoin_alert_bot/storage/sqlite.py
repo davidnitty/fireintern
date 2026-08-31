@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS moon_state (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS alert_messages (
+    alert_id INTEGER,
+    chat_id TEXT,
+    message_id INTEGER,
+    PRIMARY KEY (alert_id, chat_id)
+);
+
 CREATE TABLE IF NOT EXISTS chain_state (
     chain TEXT PRIMARY KEY,
     last_block INTEGER,
@@ -158,10 +165,10 @@ class Storage:
             return None
         return CoinData.model_validate_json(row["data"])
 
-    async def save_alert(self, alert: Alert) -> None:
-        """Persist a generated alert."""
+    async def save_alert(self, alert: Alert) -> int:
+        """Persist a generated alert. Returns the new alert id."""
         primary = alert.primary_signal
-        await self._connection.execute(
+        cursor = await self._connection.execute(
             """
             INSERT INTO alerts
                 (mint, symbol, name, generated_at, primary_signal, verdict, risk, composite_score, confidence, payload)
@@ -181,6 +188,28 @@ class Storage:
             ),
         )
         await self._connection.commit()
+        return int(cursor.lastrowid or 0)
+
+    async def store_alert_message(self, alert_id: int, chat_id: str, message_id: int) -> None:
+        """Remember the sent alert message per chat so updates can reply to it."""
+        await self._connection.execute(
+            """
+            INSERT INTO alert_messages (alert_id, chat_id, message_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(alert_id, chat_id) DO UPDATE SET message_id = excluded.message_id
+            """,
+            (alert_id, str(chat_id), int(message_id)),
+        )
+        await self._connection.commit()
+
+    async def get_alert_message_ids(self, alert_id: int) -> dict[str, int]:
+        """Return {chat_id: message_id} for a sent alert."""
+        async with self._connection.execute(
+            "SELECT chat_id, message_id FROM alert_messages WHERE alert_id = ?",
+            (alert_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return {str(r["chat_id"]): int(r["message_id"]) for r in rows}
 
     async def is_on_cooldown(self, mint: str, seconds: int) -> bool:
         """Return True if an alert was sent for this mint within `seconds`."""

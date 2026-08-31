@@ -93,13 +93,6 @@ def _short_addr(addr: str) -> str:
 # ── Main formatter ────────────────────────────────────────────────────────
 
 
-def _gmgn_url(coin) -> str | None:
-    """GMGN tracker link; only chains GMGN actually lists."""
-    if coin.chain == "solana":
-        return f"https://gmgn.ai/sol/token/{coin.mint}"
-    return None  # Robinhood Chain is not on GMGN yet
-
-
 def _fmt_mc_compact(value: float | None) -> str:
     """Market cap like 10K, 163K, 1.3M (matches the sample card)."""
     if value is None:
@@ -111,6 +104,14 @@ def _fmt_mc_compact(value: float | None) -> str:
     else:
         text = f"{value:.0f}"
     return text.rstrip("0").rstrip(".").replace(".0K", "K").replace(".0M", "M")
+
+
+def _maestro_url(coin) -> str:
+    """Maestro deep link — opens the user's bot with this CA pre-loaded."""
+    from memecoin_alert_bot.config import get_settings
+
+    referral = get_settings().maestro_referral or "r-nittyberry0"
+    return f"https://t.me/maestro?start={referral}-{coin.mint}"
 
 
 def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
@@ -132,12 +133,12 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
         f"`{coin.mint}`",
     ]
 
-    keyboard: list[list[InlineKeyboardButton]] = []
-    row = [InlineKeyboardButton("DEX", url=coin.dexscreener_url)]
-    gmgn = _gmgn_url(coin)
-    if gmgn:
-        row.append(InlineKeyboardButton("GMGN", url=gmgn))
-    keyboard.append(row)
+    keyboard: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton("Maestro", url=_maestro_url(coin)),
+            InlineKeyboardButton("Chart", url=coin.dexscreener_url),
+        ]
+    ]
 
     newline = chr(10)
     return newline.join(lines), InlineKeyboardMarkup(keyboard)

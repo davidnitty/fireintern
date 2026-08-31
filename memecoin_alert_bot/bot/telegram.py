@@ -176,8 +176,9 @@ class TelegramBot:
         multiple: float,
         mc_from: float | None,
         mc_to: float | None,
+        alert_id: int | None = None,
     ) -> bool:
-        """Send the follow-up 'is up NX' price feedback card."""
+        """Send the follow-up 'is up NX' card, replying to the original alert."""
         if not self._ready or self.application is None:
             return False
 
@@ -204,11 +205,28 @@ class TelegramBot:
             f"💸💸💸💸"
         ).strip()
 
+        # Per-chat reply targets for the original alert message.
+        reply_map: dict[str, int] = {}
+        if alert_id:
+            try:
+                reply_map = await self.storage.get_alert_message_ids(alert_id)
+            except Exception:
+                logger.debug("No stored message ids for alert %s", alert_id)
+
         chat_ids = self.settings.get_chat_ids()
         sent_any = False
         for chat_id in chat_ids:
             try:
-                await self.application.bot.send_message(chat_id=chat_id, text=text)
+                reply_to = reply_map.get(str(chat_id))
+                if reply_to:
+                    await self.application.bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        reply_to_message_id=reply_to,
+                        allow_sending_without_reply=True,
+                    )
+                else:
+                    await self.application.bot.send_message(chat_id=chat_id, text=text)
                 sent_any = True
             except Exception:
                 logger.exception("Failed to send moon update to %s", chat_id)
@@ -218,8 +236,12 @@ class TelegramBot:
     # Alert delivery
     # ------------------------------------------------------------------
 
-    async def send_alert(self, alert: Alert) -> bool:
-        """Send an alert to the configured chat if it passes filters."""
+    async def send_alert(self, alert: Alert, alert_id: int | None = None) -> bool:
+        """Send an alert to the configured chats if it passes filters.
+
+        When ``alert_id`` is given, each chat's sent message id is stored so
+        follow-up moon updates can reply to the original alert.
+        """
         if not should_send_alert(
             alert,
             mode=self.settings.subscription_mode,
@@ -243,13 +265,20 @@ class TelegramBot:
         sent_any = False
         for chat_id in chat_ids:
             try:
-                await self.application.bot.send_message(
+                message = await self.application.bot.send_message(
                     chat_id=chat_id,
                     text=text,
                     parse_mode="Markdown",
                     reply_markup=keyboard,
                     disable_web_page_preview=True,
                 )
+                if alert_id and message is not None:
+                    try:
+                        await self.storage.store_alert_message(
+                            alert_id, str(chat_id), message.message_id
+                        )
+                    except Exception:
+                        logger.debug("Could not store message id for alert %s", alert_id)
                 sent_any = True
             except Exception:
                 logger.exception("Failed to send Telegram alert to %s", chat_id)

@@ -320,7 +320,7 @@ class BotApp:
             return
 
         await self.storage.record_backtest_snapshot(coin, score)
-        await self.storage.save_alert(alert)
+        alert_id = await self.storage.save_alert(alert)
 
         # Ledger the delivery decision with its actual suppression reason.
         from memecoin_alert_bot.bot.formatter import should_send_alert
@@ -338,7 +338,7 @@ class BotApp:
             else:
                 await self._record_decision(coin, "suppressed_pass", score_json=score.model_dump_json())
 
-        sent = await self.telegram.send_alert(alert)
+        sent = await self.telegram.send_alert(alert, alert_id=alert_id)
         if sent:
             await self._record_decision(coin, "sent", score_json=score.model_dump_json())
             await self.storage.set_cooldown(mint)
@@ -439,7 +439,8 @@ class BotApp:
                             else:
                                 mc_from = mc_to = None
                             sent = await self.telegram.send_moon_update(
-                                symbol, cumulative, mc_from, mc_to
+                                symbol, cumulative, mc_from, mc_to,
+                                alert_id=item["alert_id"],
                             )
                             await self.storage.set_moon_multiple(mint, cumulative)
                             if sent:

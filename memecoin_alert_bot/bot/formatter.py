@@ -114,6 +114,19 @@ def _maestro_url(coin) -> str:
     return f"https://t.me/maestro?start={referral}-{coin.mint}"
 
 
+def _bloom_url(coin) -> str:
+    """Bloom trading bot deep link."""
+    return f"https://telegram.me/BloomEVMbot?start=ref_5I0QKYENJB-{coin.mint}"
+
+
+def _based_bot_url(coin) -> str:
+    """Based Bot deep link (EVM chains)."""
+    from memecoin_alert_bot.config import get_settings
+
+    referral = get_settings().maestro_referral or "r-nittyberry0"
+    return f"https://t.me/based_eth_bot?start={referral}"
+
+
 def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
     """Build the minimal 'Intern Signal Call' card."""
     coin = alert.coin
@@ -139,6 +152,14 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("Chart", url=coin.dexscreener_url),
         ]
     ]
+    # Bloom and Based are EVM trading bots — show them on EVM chains only.
+    if coin.chain != "solana":
+        keyboard.append(
+            [
+                InlineKeyboardButton("BloomEVM", url=_bloom_url(coin)),
+                InlineKeyboardButton("BasedBot", url=_based_bot_url(coin)),
+            ]
+        )
 
     newline = chr(10)
     return newline.join(lines), InlineKeyboardMarkup(keyboard)

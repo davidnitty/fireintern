@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     moon_update_pct: float = Field(default=50.0, alias="MOON_UPDATE_PCT")
     # Maestro referral code; alerts deep-link t.me/maestro?start=<ref>-<CA>
     maestro_referral: str = Field(default="r-nittyberry0", alias="MAESTRO_REFERRAL")
+    # Trading-bot deep-link templates. {ca} is replaced with the token CA.
+    # Adjust the separators here if a bot parses its start payload differently.
+    bloom_url_template: str = Field(
+        default="https://telegram.me/BloomEVMbot?start=ref_5I0QKYENJB_{ca}",
+        alias="BLOOM_URL_TEMPLATE",
+    )
+    based_url_template: str = Field(
+        default="https://t.me/based_eth_bot?start=r_nittyberry0_{ca}",
+        alias="BASED_URL_TEMPLATE",
+    )
     subscription_mode: str = Field(default="all", alias="SUBSCRIPTION_MODE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 

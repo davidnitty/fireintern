@@ -88,3 +88,16 @@ def test_maestro_deep_link_contains_referral_and_ca():
         "https://t.me/maestro?start=r-nittyberry0-"
         "0x5d9144d2d017386519a7134Fcc7f1E4bA22f920c"
     )
+
+
+def test_bloom_and_based_urls_embed_the_ca():
+    """Bloom/Based buttons must carry the token CA in the start payload."""
+    coin = CoinData(
+        mint="0x5d9144d2d017386519a7134Fcc7f1E4bA22f920c", symbol="SHRUB"
+    )
+    from memecoin_alert_bot.bot.formatter import _based_bot_url, _bloom_url
+
+    bloom = _bloom_url(coin)
+    based = _based_bot_url(coin)
+    assert "ref_5I0QKYENJB_0x5d9144d2d017386519a7134Fcc7f1E4bA22f920c" in bloom
+    assert "r_nittyberry0_0x5d9144d2d017386519a7134Fcc7f1E4bA22f920c" in based

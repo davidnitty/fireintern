@@ -115,16 +115,17 @@ def _maestro_url(coin) -> str:
 
 
 def _bloom_url(coin) -> str:
-    """Bloom trading bot deep link."""
-    return f"https://telegram.me/BloomEVMbot?start=ref_5I0QKYENJB-{coin.mint}"
+    """Bloom trading bot deep link with the token CA embedded."""
+    from memecoin_alert_bot.config import get_settings
+
+    return get_settings().bloom_url_template.format(ca=coin.mint)
 
 
 def _based_bot_url(coin) -> str:
-    """Based Bot deep link (EVM chains)."""
+    """Based Bot deep link with the token CA embedded."""
     from memecoin_alert_bot.config import get_settings
 
-    referral = get_settings().maestro_referral or "r-nittyberry0"
-    return f"https://t.me/based_eth_bot?start={referral}"
+    return get_settings().based_url_template.format(ca=coin.mint)
 
 
 def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:

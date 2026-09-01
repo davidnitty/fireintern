@@ -257,8 +257,12 @@ class BotApp:
         except Exception:
             logger.debug("Decision record failed for %s", coin.mint)
 
-    async def _evaluate_and_alert(self, coin: CoinData) -> None:
-        """Run detectors, score, and optionally send a Telegram alert."""
+    async def _evaluate_and_alert(self, coin: CoinData) -> str:
+        """Run detectors, score, and optionally send a Telegram alert.
+
+        Returns the decision stage so callers (e.g. the Solana rescan loop)
+        know whether to keep watching this token.
+        """
         mint = coin.mint
 
         # ── Identity filter: never alert on unnamed/UNKNOWN tokens ──
@@ -267,27 +271,42 @@ class BotApp:
         if not coin.symbol or coin.symbol == "UNKNOWN":
             logger.debug("Skipping %s — symbol unknown (enrichment incomplete)", mint)
             await self._record_decision(coin, "unknown_identity", "symbol UNKNOWN")
-            return
+            return "unknown_identity"
 
         # ── Market-cap filter (strict, USD) ──
         if coin.market_cap is None:
             logger.debug("Skipping %s — no market cap data", mint)
             await self._record_decision(coin, "mc_missing", "no market cap data")
-            return
+            return "mc_missing"
+
         if coin.market_cap < self.settings.min_market_cap:
             logger.debug(
                 "Skipping %s — MC $%.0f < min $%.0f",
                 mint, coin.market_cap, self.settings.min_market_cap,
             )
             await self._record_decision(coin, "mc_below_floor", f"mc {coin.market_cap:.0f}")
-            return
+            # pump.fun tokens are BORN around $5k; watch for an hour and
+            # re-evaluate the moment they cross the floor with real buying.
+            if coin.chain == "solana":
+                try:
+                    await self.storage.add_sol_watchlist(
+                        mint=mint,
+                        symbol=coin.symbol,
+                        name=coin.name,
+                        metadata_uri=coin.metadata_uri,
+                        first_mc=coin.market_cap,
+                    )
+                except Exception:
+                    logger.debug("Watchlist add failed for %s", mint)
+            return "mc_below_floor"
+
         if self.settings.max_market_cap > 0 and coin.market_cap > self.settings.max_market_cap:
             logger.debug(
                 "Skipping %s — MC $%.0f > max $%.0f",
                 mint, coin.market_cap, self.settings.max_market_cap,
             )
             await self._record_decision(coin, "mc_above_ceiling", f"mc {coin.market_cap:.0f}")
-            return
+            return "mc_above_ceiling"
 
         # ── NLP narrative analysis (must run before buying-activity check) ──
         narrative_text = f"{coin.name} {coin.description}"
@@ -312,7 +331,7 @@ class BotApp:
         if not has_verified_volume and not has_directional_buys:
             logger.debug("Skipping %s — no buying activity detected", mint)
             await self._record_decision(coin, "no_buying_activity")
-            return
+            return "no_buying_activity"
 
         # ── Per-symbol cooldown (catch name copycats) ──
         import time
@@ -321,7 +340,7 @@ class BotApp:
         if last and (now - last) < 60:
             logger.debug("Skipping %s — symbol %s on cooldown", mint, coin.symbol)
             await self._record_decision(coin, "symbol_cooldown", coin.symbol)
-            return
+            return "symbol_cooldown"
         self._symbol_cooldowns[coin.symbol] = now
 
         await self.storage.upsert_coin(coin)
@@ -334,7 +353,7 @@ class BotApp:
         if await self.storage.is_on_cooldown(mint, self.settings.alert_cooldown_seconds):
             logger.debug("Alert for %s is on cooldown", mint)
             await self._record_decision(coin, "alert_cooldown")
-            return
+            return "alert_cooldown"
 
         await self.storage.record_backtest_snapshot(coin, score)
         alert_id = await self.storage.save_alert(alert)
@@ -350,10 +369,13 @@ class BotApp:
         if not send_ok:
             if score.tier.value == "HIGH_RISK":
                 await self._record_decision(coin, "suppressed_high_risk", score_json=score.model_dump_json())
+                return "suppressed_high_risk"
             elif score.confidence < self.settings.min_confidence:
                 await self._record_decision(coin, "suppressed_confidence", score_json=score.model_dump_json())
+                return "suppressed_confidence"
             else:
                 await self._record_decision(coin, "suppressed_pass", score_json=score.model_dump_json())
+                return "suppressed_pass"
 
         sent = await self.telegram.send_alert(alert, alert_id=alert_id)
         if sent:
@@ -367,11 +389,73 @@ class BotApp:
                 score.verdict.value,
                 score.composite_score,
             )
+            return "sent"
         elif not send_ok:
             logger.debug(
                 "Alert suppressed: %s | tier=%s confidence=%.2f",
                 coin.symbol, score.tier.value, score.confidence,
             )
+        return "delivery_failed"
+
+    async def _solana_rescan_loop(self, interval_seconds: float = 45.0) -> None:
+        """Re-check watched Solana launches; alert when they cross the floor.
+
+        pump.fun tokens are born below the market-cap floor and grow into it
+        within minutes when people buy. Without this loop they are evaluated
+        once at birth and permanently missed.
+        """
+        logger.info("Solana rescan loop started (watchlist re-check every %.0fs)", interval_seconds)
+        while True:
+            try:
+                rows = await self.storage.get_sol_watchlist(limit=120)
+                for row in rows:
+                    mint = row["mint"]
+                    try:
+                        enrichment = await self.dexscreener.enrich_coin(
+                            mint, {}, chain="solana"
+                        )
+                        mc = enrichment.get("market_cap")
+                        if mc is None or mc < self.settings.min_market_cap:
+                            continue  # still below floor — keep watching
+
+                        logger.info(
+                            "Rescan: %s crossed the floor ($%.0f) — re-evaluating",
+                            row["symbol"] or mint, mc,
+                        )
+                        coin = CoinData(
+                            mint=mint,
+                            chain="solana",
+                            symbol=row["symbol"] or "UNKNOWN",
+                            name=row["name"] or "",
+                            metadata_uri=row["metadata_uri"],
+                            age_seconds=None,
+                            sources={"sol_rescan": {"first_mc": row["first_mc"]}},
+                        )
+                        coin = normalizer.merge_enrichment(coin, enrichment)
+
+                        if self._identity_incomplete(coin):
+                            await self._fill_metadata_from_uri(coin)
+                        if self._identity_incomplete(coin):
+                            coin = await self._enrich_solana_coin(coin)
+
+                        trades = self._solana_trades.get(mint)
+                        if trades:
+                            total = trades.get("buy", 0) + trades.get("sell", 0)
+                            if total > 0:
+                                coin.buy_pressure = trades.get("buy", 0) / total
+
+                        stage = await self._evaluate_and_alert(coin)
+                        # Stop watching once fully processed, or keep watching
+                        # while it still has no market/volume data.
+                        if stage not in ("mc_missing", "no_buying_activity"):
+                            await self.storage.remove_sol_watchlist(mint)
+                    except Exception as exc:
+                        logger.debug("Rescan failed for %s: %s", mint, exc)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Solana rescan loop error")
+            await asyncio.sleep(interval_seconds)
 
     async def _outcome_tracker_loop(self, interval_seconds: float = 60.0) -> None:
         """Re-price alerted tokens at +5m/+15m/+1h/+24h for calibration (guide §5)."""
@@ -569,6 +653,7 @@ class BotApp:
         logger.info("Starting Memecoin Alert Bot")
         pumpportal_task = pumpportal.start()
         outcome_task = asyncio.create_task(self._outcome_tracker_loop())
+        rescan_task = asyncio.create_task(self._solana_rescan_loop())
 
         try:
             await self._shutdown_event.wait()
@@ -585,6 +670,7 @@ class BotApp:
                 await self._solana_discovery.stop()
             telegram_task.cancel()
             outcome_task.cancel()
+            rescan_task.cancel()
             for t in robinhood_tasks:
                 t.cancel()
                 try:
@@ -597,6 +683,10 @@ class BotApp:
                 pass
             try:
                 await outcome_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await rescan_task
             except asyncio.CancelledError:
                 pass
             await self.telegram.stop()

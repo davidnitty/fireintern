@@ -124,3 +124,36 @@ async def test_decisions_and_outcomes_ledger(tmp_path):
         assert summary[0]["pct_change"] == pytest.approx(20.0, rel=0.01)
     finally:
         await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_sol_watchlist_lifecycle(tmp_path):
+    """Below-floor launches get watched, re-checked, and cleaned up."""
+    storage = Storage(str(tmp_path / "watch.db"))
+    await storage.connect()
+    try:
+        await storage.add_sol_watchlist(
+            mint="WatchMint1111111111111111111111111111111111",
+            symbol="WM",
+            name="Watch Me",
+            metadata_uri="ipfs://QmWatch/meta.json",
+            first_mc=4900.0,
+            watch_minutes=60,
+        )
+        rows = await storage.get_sol_watchlist(limit=150)
+        assert len(rows) == 1
+        assert rows[0]["mint"] == "WatchMint1111111111111111111111111111111111"
+        assert rows[0]["symbol"] == "WM"
+
+        # Expired rows are pruned on read.
+        await storage._connection.execute(
+            "UPDATE sol_watchlist SET expires_at = ? WHERE mint = ?",
+            ("2026-01-01T00:00:00+00:00", "WatchMint1111111111111111111111111111111111"),
+        )
+        await storage._connection.commit()
+        assert await storage.get_sol_watchlist(limit=150) == []
+
+        await storage.remove_sol_watchlist("WatchMint1111111111111111111111111111111111")
+        assert await storage.get_sol_watchlist(limit=150) == []
+    finally:
+        await storage.close()

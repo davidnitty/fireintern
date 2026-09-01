@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS alert_messages (
     PRIMARY KEY (alert_id, chat_id)
 );
 
+CREATE TABLE IF NOT EXISTS sol_watchlist (
+    mint TEXT PRIMARY KEY,
+    symbol TEXT,
+    name TEXT,
+    metadata_uri TEXT,
+    first_mc REAL,
+    added_at TEXT,
+    expires_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS chain_state (
     chain TEXT PRIMARY KEY,
     last_block INTEGER,
@@ -210,6 +220,68 @@ class Storage:
         ) as cursor:
             rows = await cursor.fetchall()
         return {str(r["chat_id"]): int(r["message_id"]) for r in rows}
+
+    # ── Solana watchlist: re-check sub-floor launches as they grow ──────
+
+    async def add_sol_watchlist(
+        self,
+        mint: str,
+        symbol: str,
+        name: str,
+        metadata_uri: str | None,
+        first_mc: float | None,
+        watch_minutes: int = 60,
+    ) -> None:
+        """Watch a below-floor Solana launch for `watch_minutes`."""
+        now = datetime.now(timezone.utc)
+        await self._connection.execute(
+            """
+            INSERT INTO sol_watchlist (mint, symbol, name, metadata_uri, first_mc, added_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(mint) DO NOTHING
+            """,
+            (
+                mint,
+                symbol,
+                name,
+                metadata_uri,
+                first_mc,
+                now.isoformat(),
+                (now + timedelta(minutes=watch_minutes)).isoformat(),
+            ),
+        )
+        # Bound the table; only the newest launches matter.
+        await self._connection.execute(
+            """
+            DELETE FROM sol_watchlist WHERE mint NOT IN (
+                SELECT mint FROM sol_watchlist ORDER BY added_at DESC LIMIT 2000
+            )
+            """
+        )
+        await self._connection.commit()
+
+    async def get_sol_watchlist(self, limit: int = 150) -> list[dict[str, Any]]:
+        """Return unexpired watchlist rows, newest first, capped per cycle."""
+        await self._connection.execute(
+            "DELETE FROM sol_watchlist WHERE expires_at <= ?",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        await self._connection.commit()
+        async with self._connection.execute(
+            """
+            SELECT mint, symbol, name, metadata_uri, first_mc FROM sol_watchlist
+            WHERE expires_at > ? ORDER BY added_at DESC LIMIT ?
+            """,
+            (datetime.now(timezone.utc).isoformat(), limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def remove_sol_watchlist(self, mint: str) -> None:
+        await self._connection.execute(
+            "DELETE FROM sol_watchlist WHERE mint = ?", (mint,)
+        )
+        await self._connection.commit()
 
     async def is_on_cooldown(self, mint: str, seconds: int) -> bool:
         """Return True if an alert was sent for this mint within `seconds`."""

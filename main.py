@@ -457,8 +457,110 @@ class BotApp:
                 logger.exception("Solana rescan loop error")
             await asyncio.sleep(interval_seconds)
 
+    async def _moon_check(
+        self,
+        alert_id: int,
+        mint: str,
+        chain: str,
+        symbol: str,
+        mc_alert: float | None,
+        price_alert: float | None,
+    ) -> bool:
+        """Check one token's live multiple against the ladder; send if crossed.
+
+        Cumulative multiple is always measured from the original call's
+        baseline (moon_state) — dumps never reset it. Returns True when an
+        update was sent.
+        """
+        enrichment = await self.dexscreener.enrich_coin(mint, {}, chain=chain)
+        mc_now = enrichment.get("market_cap")
+        price_now = enrichment.get("price")
+        if mc_now is None and price_now is None:
+            return False
+
+        state = await self.storage.ensure_moon_state(mint, mc_alert, price_alert)
+        baseline_mc = state.get("baseline_mc")
+        baseline_price = state.get("baseline_price")
+        last_multiple = float(state.get("last_multiple") or 1.0)
+
+        cumulative = None
+        if baseline_mc and mc_now and baseline_mc > 0:
+            cumulative = mc_now / baseline_mc
+        elif baseline_price and price_now and baseline_price > 0:
+            cumulative = price_now / baseline_price
+        if cumulative is None:
+            return False
+
+        from memecoin_alert_bot.utils.helpers import next_moon_threshold
+
+        threshold = next_moon_threshold(self.settings.moon_update_pct, last_multiple)
+        if cumulative < threshold or cumulative <= last_multiple:
+            return False
+
+        mc_from = baseline_mc if (baseline_mc and mc_now) else None
+        mc_to = mc_now if (baseline_mc and mc_now) else None
+        sent = await self.telegram.send_moon_update(
+            symbol, cumulative, mc_from, mc_to, alert_id=alert_id
+        )
+        await self.storage.set_moon_multiple(mint, cumulative)
+        if sent:
+            coin_like = CoinData(mint=mint, chain=chain, symbol=symbol, market_cap=mc_now)
+            await self._record_decision(
+                coin_like, "moon_update", f"{cumulative:.2f}X cumulative (live)"
+            )
+            logger.info("Moon update sent: %s up %.2fX cumulative", symbol, cumulative)
+        return sent
+
+    async def _moon_watch_loop(self, interval_seconds: float = 30.0, window_minutes: int = 30) -> None:
+        """Fast loop: watch newly alerted tokens every 30s for 30 minutes.
+
+        Fixed horizons (+5m/+15m/...) are too slow for memecoin pumps — a
+        14X can happen and retrace between snapshots. This loop samples the
+        live price continuously during the critical first half hour so the
+        ladder fires the moment it is crossed.
+        """
+        logger.info(
+            "Moon watch started (every %.0fs for %dm after each alert)",
+            interval_seconds, window_minutes,
+        )
+        while True:
+            try:
+                rows = await self.storage.get_recent_alerts_for_moon(window_minutes)
+                for row in rows:
+                    chain, symbol = "solana", "TOKEN"
+                    mc_alert = price_alert = None
+                    try:
+                        payload = json.loads(row["payload"]) if row["payload"] else {}
+                        coin_payload = payload.get("coin", {})
+                        chain = coin_payload.get("chain", "solana")
+                        symbol = coin_payload.get("symbol") or symbol
+                        mc_alert = coin_payload.get("market_cap")
+                        price_alert = coin_payload.get("price")
+                    except Exception:
+                        pass
+                    try:
+                        await self._moon_check(
+                            alert_id=row["id"],
+                            mint=row["mint"],
+                            chain=chain,
+                            symbol=symbol,
+                            mc_alert=mc_alert,
+                            price_alert=price_alert,
+                        )
+                    except Exception as exc:
+                        logger.debug("Moon check failed for %s: %s", row["mint"], exc)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Moon watch loop error")
+            await asyncio.sleep(interval_seconds)
+
     async def _outcome_tracker_loop(self, interval_seconds: float = 60.0) -> None:
-        """Re-price alerted tokens at +5m/+15m/+1h/+24h for calibration (guide §5)."""
+        """Record calibration outcomes at +5m/+15m/+1h/+24h (guide §5).
+
+        Moon updates are sent by _moon_watch_loop (continuous); this loop
+        only records the fixed-horizon snapshots for calibration.
+        """
         horizons = [5, 15, 60, 1440]
         logger.info("Outcome tracker started (horizons: %s)", horizons)
         while True:
@@ -503,59 +605,6 @@ class BotApp:
                     logger.info(
                         "Outcome: %s +%sm %+.1f%%", mint, item["horizon_min"], pct or 0.0
                     )
-
-                    # ── Moon update: CUMULATIVE feedback from the original call ──
-                    # Multiple is always measured from the first alert's MC,
-                    # never from the latest checkpoint — dumps and re-pumps
-                    # continue the count (20.5X -> 41X -> ...) instead of
-                    # restarting from the dip.
-                    if price_now is not None or mc_now is not None:
-                        state = await self.storage.ensure_moon_state(
-                            mint, mc_alert, price_alert
-                        )
-                        baseline_mc = state.get("baseline_mc")
-                        baseline_price = state.get("baseline_price")
-                        last_multiple = float(state.get("last_multiple") or 1.0)
-
-                        cumulative = None
-                        if baseline_mc and mc_now and baseline_mc > 0:
-                            cumulative = mc_now / baseline_mc
-                        elif baseline_price and price_now and baseline_price > 0:
-                            cumulative = price_now / baseline_price
-
-                        from memecoin_alert_bot.utils.helpers import next_moon_threshold
-
-                        threshold = next_moon_threshold(
-                            self.settings.moon_update_pct, last_multiple
-                        )
-                        if cumulative and cumulative >= threshold and cumulative > last_multiple:
-                            symbol = "TOKEN"
-                            try:
-                                payload = json.loads(item["payload"]) if item["payload"] else {}
-                                symbol = payload.get("coin", {}).get("symbol") or symbol
-                            except Exception:
-                                pass
-                            if baseline_mc and mc_now:
-                                mc_from, mc_to = baseline_mc, mc_now
-                            else:
-                                mc_from = mc_to = None
-                            sent = await self.telegram.send_moon_update(
-                                symbol, cumulative, mc_from, mc_to,
-                                alert_id=item["alert_id"],
-                            )
-                            await self.storage.set_moon_multiple(mint, cumulative)
-                            if sent:
-                                coin_like = CoinData(
-                                    mint=mint, chain=chain, symbol=symbol, market_cap=mc_now
-                                )
-                                await self._record_decision(
-                                    coin_like,
-                                    "moon_update",
-                                    f"{cumulative:.2f}X at +{item['horizon_min']}m (cumulative)",
-                                )
-                                logger.info(
-                                    "Moon update sent: %s up %.2fX cumulative", symbol, cumulative
-                                )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -654,6 +703,7 @@ class BotApp:
         pumpportal_task = pumpportal.start()
         outcome_task = asyncio.create_task(self._outcome_tracker_loop())
         rescan_task = asyncio.create_task(self._solana_rescan_loop())
+        moon_watch_task = asyncio.create_task(self._moon_watch_loop())
 
         try:
             await self._shutdown_event.wait()
@@ -671,6 +721,7 @@ class BotApp:
             telegram_task.cancel()
             outcome_task.cancel()
             rescan_task.cancel()
+            moon_watch_task.cancel()
             for t in robinhood_tasks:
                 t.cancel()
                 try:
@@ -687,6 +738,10 @@ class BotApp:
                 pass
             try:
                 await rescan_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await moon_watch_task
             except asyncio.CancelledError:
                 pass
             await self.telegram.stop()

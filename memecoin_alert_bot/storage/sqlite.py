@@ -555,6 +555,30 @@ class Storage:
         )
         await self._connection.commit()
 
+    async def get_recent_alerts_for_moon(self, window_minutes: int = 30) -> list[dict[str, Any]]:
+        """Distinct recently-alerted mints for continuous moon watching.
+
+        Returns the LATEST alert per mint within the window (re-alerts must
+        not reset the cumulative multiple — moon_state owns the baseline).
+        """
+        since = (datetime.now(timezone.utc) - timedelta(minutes=window_minutes)).isoformat()
+        async with self._connection.execute(
+            """
+            SELECT a.id, a.mint, a.generated_at, a.payload
+            FROM alerts a
+            WHERE a.generated_at >= ?
+            ORDER BY a.generated_at DESC
+            """,
+            (since,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        latest_by_mint: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if row["mint"] not in latest_by_mint:
+                latest_by_mint[row["mint"]] = dict(row)
+        return list(latest_by_mint.values())
+
     async def calibration_summary(self) -> list[dict[str, Any]]:
         """Join alerts with outcomes for per-tier precision analysis."""
         async with self._connection.execute(

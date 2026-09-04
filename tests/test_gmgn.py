@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from memecoin_alert_bot.data.gmgn import GmgnClient
-from memecoin_alert_bot.engine.models import CoinData
+from memecoin_alert_bot.engine.models import Alert, CoinData
 
 
 def test_gmgn_keyless_is_disabled():
@@ -64,3 +64,21 @@ def test_gmgn_url_carries_ca():
     url = _gmgn_url(coin)
     assert url == f"https://gmgn.ai/sol/token/{coin.mint}"
     assert coin.mint in url
+
+
+def test_gmgn_url_robinhood_supported():
+    """Robinhood cards get a GMGN button too (native chain support)."""
+    from memecoin_alert_bot.bot.formatter import _gmgn_url
+
+    coin = CoinData(mint="0x5d9144d2d017386519a7134Fcc7f1E4bA22f920c", chain="robinhood")
+    assert _gmgn_url(coin) == f"https://gmgn.ai/robinhood/token/{coin.mint}"
+
+
+def test_robinhood_card_includes_gmgn_button():
+    from memecoin_alert_bot.bot.formatter import format_alert
+
+    coin = CoinData(mint="0xabc", chain="robinhood", symbol="T", name="T", market_cap=50_000)
+    _, kb = format_alert(Alert(coin=coin))
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "GMGN" in texts
+    assert "Maestro" in texts

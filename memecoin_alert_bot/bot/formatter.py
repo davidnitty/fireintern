@@ -129,10 +129,12 @@ def _based_bot_url(coin) -> str:
 
 
 def _gmgn_url(coin) -> str | None:
-    """GMGN token page deep link (Solana + other listed chains)."""
+    """GMGN token page deep link (with CA) for supported chains."""
     if coin.chain == "solana":
         return f"https://gmgn.ai/sol/token/{coin.mint}"
-    return None  # Robinhood Chain is not on gmgn.ai yet
+    if coin.chain == "robinhood":
+        return f"https://gmgn.ai/robinhood/token/{coin.mint}"
+    return None
 
 
 def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:

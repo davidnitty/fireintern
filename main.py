@@ -15,7 +15,7 @@ from memecoin_alert_bot.bot.telegram import TelegramBot
 from memecoin_alert_bot.config import get_settings
 from memecoin_alert_bot.data.bitquery import BitqueryClient
 from memecoin_alert_bot.data.bubblemaps import BubblemapsClient
-from memecoin_alert_bot.data.direct_discovery import DirectDiscoveryIndexer
+from memecoin_alert_bot.data.direct_discovery import DEXSCREENER_SLUG, DirectDiscoveryIndexer
 from memecoin_alert_bot.data.gmgn import GmgnClient
 from memecoin_alert_bot.data.dexscreener import DexScreenerClient
 from memecoin_alert_bot.data.noxa import NoxaIndexer
@@ -620,6 +620,55 @@ class BotApp:
                         await self._process_gmgn_trench_item(item, "robinhood")
                 except Exception as exc:
                     logger.debug("GMGN robinhood trenches failed: %s", exc)
+
+                # Robinhood trending (1m): sweeps up non-Pons tokens that
+                # already have live activity but were missed at creation —
+                # only tokens never processed before are evaluated.
+                try:
+                    trending = await self.gmgn.get_trending(
+                        "robinhood", interval="1m", limit=50, order_by="swaps"
+                    )
+                    for item in trending:
+                        mint = item.get("address") or item.get("token_address") or ""
+                        if not mint:
+                            continue
+                        if await self.storage.get_coin(mint):
+                            continue  # already processed previously
+                        logger.info(
+                            "GMGN trending: unseen robinhood token %s — evaluating",
+                            item.get("symbol") or mint,
+                        )
+                        await self._process_gmgn_trench_item(item, "robinhood")
+                except Exception as exc:
+                    logger.debug("GMGN robinhood trending failed: %s", exc)
+
+                # DexScreener sweep: fresh robinhood pairs via search —
+                # GMGN and Dex jointly cover non-Pons launches.
+                try:
+                    fresh = await self.dexscreener.get_new_pairs(
+                        DEXSCREENER_SLUG, max_age_minutes=60
+                    )
+                    for pair in fresh:
+                        base = pair.get("baseToken") or {}
+                        mint = base.get("address") or ""
+                        if not mint or await self.storage.get_coin(mint):
+                            continue
+                        best = (
+                            await self._direct_discovery._best_pair(mint)
+                            if self._direct_discovery
+                            else None
+                        )
+                        if not best:
+                            continue
+                        coin = await self._direct_discovery._build_coin(mint, best)
+                        if coin:
+                            logger.info(
+                                "Dex sweep: unseen robinhood token %s — evaluating",
+                                coin.symbol,
+                            )
+                            await self._handle_robinhood_token(coin)
+                except Exception as exc:
+                    logger.debug("Dex robinhood sweep failed: %s", exc)
             except asyncio.CancelledError:
                 raise
             except Exception:

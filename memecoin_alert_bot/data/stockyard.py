@@ -59,6 +59,7 @@ class StockyardClient:
             return []
 
         memes: list[dict[str, Any]] = []
+        by_mint: dict[str, dict[str, Any]] = {}
         for row in data.get("rows", []) or []:
             stock_ticker = row.get("t") or ""
             stock_addr = row.get("a") or ""
@@ -72,24 +73,28 @@ class StockyardClient:
                     tail = link.rsplit("/", 1)[-1].split("?")[0]
                     if len(tail) >= 64:
                         pair_id = tail[-64:]
-                memes.append(
-                    {
-                        "mint": address,
-                        "symbol": m.get("s") or "UNKNOWN",
-                        "name": f"{m.get('s', '')} ({stock_ticker} pair)".strip(),
-                        "market_cap": _f(m.get("mc")),
-                        "liquidity": _f(m.get("l")),
-                        "volume_24h": _f(m.get("v")),
-                        "tx_count": _i(m.get("tx")),
-                        "age_hours": _f(m.get("age")),
-                        "change_series": m.get("cs") or [],
-                        "launchpad": m.get("lp") or "",
-                        "stock_ticker": stock_ticker,
-                        "stock_address": stock_addr,
-                        "pool_id": pair_id,
-                        "raw": m,
-                    }
-                )
+                entry = {
+                    "mint": address,
+                    "symbol": m.get("s") or "UNKNOWN",
+                    "name": f"{m.get('s', '')} ({stock_ticker} pair)".strip(),
+                    "market_cap": _f(m.get("mc")),
+                    "liquidity": _f(m.get("l")),
+                    "volume_24h": _f(m.get("v")),
+                    "tx_count": _i(m.get("tx")),
+                    "age_hours": _f(m.get("age")),
+                    "change_series": m.get("cs") or [],
+                    "launchpad": m.get("lp") or "",
+                    "stock_ticker": stock_ticker,
+                    "stock_address": stock_addr,
+                    "pool_id": pair_id,
+                    "raw": m,
+                }
+                # The same memecoin is often listed under several pools /
+                # launchpads — keep only its most liquid entry.
+                existing = by_mint.get(address)
+                if existing is None or (entry["volume_24h"] or 0) > (existing["volume_24h"] or 0):
+                    by_mint[address] = entry
+        memes = list(by_mint.values())
         return memes
 
 

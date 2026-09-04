@@ -59,6 +59,7 @@ class BotApp:
         self._noxa_indexer: NoxaIndexer | None = None
         self._direct_discovery: DirectDiscoveryIndexer | None = None
         self._solana_discovery: DirectDiscoveryIndexer | None = None
+        self._alert_send_times: list[float] = []  # global send-rate window
         self._symbol_cooldowns: dict[str, float] = {}  # symbol -> last alert timestamp
 
     async def _init_clients(self) -> None:
@@ -413,8 +414,22 @@ class BotApp:
                 await self._record_decision(coin, "suppressed_pass", score_json=score.model_dump_json())
                 return "suppressed_pass"
 
+        # ── Global alert rate limiter: max 8 sends per rolling minute ──
+        # Discovery floods (bootstrap backlogs, multi-pool listings) must
+        # never spam the channel; overflow is dropped (ledgered).
+        import time as _time
+
+        now_ts = _time.time()
+        recent = [t for t in self._alert_send_times if now_ts - t < 60]
+        self._alert_send_times = recent
+        if len(recent) >= 8:
+            logger.debug("Rate limited alert for %s (%d sent last 60s)", mint, len(recent))
+            await self._record_decision(coin, "rate_limited", f"{len(recent)} alerts/min")
+            return "rate_limited"
+
         sent = await self.telegram.send_alert(alert, alert_id=alert_id)
         if sent:
+            self._alert_send_times.append(now_ts)
             await self._record_decision(coin, "sent", score_json=score.model_dump_json())
             await self.storage.set_cooldown(mint)
             logger.info(
@@ -482,8 +497,9 @@ class BotApp:
 
                         stage = await self._evaluate_and_alert(coin)
                         # Stop watching once fully processed, or keep watching
-                        # while it still has no market/volume data.
-                        if stage not in ("mc_missing", "no_buying_activity"):
+                        # while it still has no market/volume data, or while
+                        # the global alert rate limiter is saturated.
+                        if stage not in ("mc_missing", "no_buying_activity", "rate_limited"):
                             await self.storage.remove_sol_watchlist(mint)
                     except Exception as exc:
                         logger.debug("Rescan failed for %s: %s", mint, exc)
@@ -721,11 +737,17 @@ class BotApp:
             try:
                 memes = await self.stockyard.get_paired_memecoins()
                 seen = 0
+                processed = 0
                 for meme in memes:
                     mint = meme["mint"]
                     if await self.storage.get_coin(mint):
                         seen += 1
                         continue
+                    # Trickle: bootstrap backlogs (hundreds of unseen pairs)
+                    # must not flood the channel — spread across cycles.
+                    if processed >= 6:
+                        continue
+                    processed += 1
                     try:
                         pair_id = meme.get("pool_id") or ""
                         coin = CoinData(

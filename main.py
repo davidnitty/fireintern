@@ -61,7 +61,13 @@ class BotApp:
         self._symbol_cooldowns: dict[str, float] = {}  # symbol -> last alert timestamp
 
     async def _init_clients(self) -> None:
-        self.session = aiohttp.ClientSession()
+        # DNS-resilient shared session: cached resolver with DoH fallback
+        # rides through the machine's intermittent "getaddrinfo failed" drops.
+        from memecoin_alert_bot.utils.resolver import CachedDohResolver
+
+        self._resolver = CachedDohResolver()
+        connector = aiohttp.TCPConnector(resolver=self._resolver)
+        self.session = aiohttp.ClientSession(connector=connector)
         self.pumpfun = PumpFunClient(self.session)
         self.dexscreener = DexScreenerClient(self.session)
         self.rugcheck = RugcheckClient(self.settings.rugcheck_api_key, self.session)
@@ -92,6 +98,8 @@ class BotApp:
         self._clients.clear()
         if self.session and not self.session.closed:
             await self.session.close()
+        if getattr(self, "_resolver", None):
+            await self._resolver.close()
 
     async def _enrich_solana_coin(self, coin) -> None:
         """Fetch and merge metadata from all configured Solana sources."""

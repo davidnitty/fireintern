@@ -16,6 +16,7 @@ from memecoin_alert_bot.config import get_settings
 from memecoin_alert_bot.data.bitquery import BitqueryClient
 from memecoin_alert_bot.data.bubblemaps import BubblemapsClient
 from memecoin_alert_bot.data.direct_discovery import DirectDiscoveryIndexer
+from memecoin_alert_bot.data.gmgn import GmgnClient
 from memecoin_alert_bot.data.dexscreener import DexScreenerClient
 from memecoin_alert_bot.data.noxa import NoxaIndexer
 from memecoin_alert_bot.data.pons import PonsIndexer
@@ -32,6 +33,13 @@ from memecoin_alert_bot.storage.sqlite import Storage
 from memecoin_alert_bot.utils.helpers import setup_logging
 
 logger = logging.getLogger("memecoin_alert_bot")
+
+
+def _to_f(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 class BotApp:
@@ -62,6 +70,7 @@ class BotApp:
         self.robinhood = RobinhoodChainClient(self.settings.robinhood_rpc_url, self.session)
         self.bubblemaps = BubblemapsClient(self.settings.bubblemaps_api_key, self.session)
         self.bitquery = BitqueryClient(self.settings.bitquery_api_key, self.session)
+        self.gmgn = GmgnClient(self.settings.gmgn_api_key, self.session)
         self._clients = [
             self.pumpfun,
             self.dexscreener,
@@ -71,6 +80,7 @@ class BotApp:
             self.robinhood,
             self.bubblemaps,
             self.bitquery,
+            self.gmgn,
         ]
 
     async def _close_clients(self) -> None:
@@ -105,6 +115,8 @@ class BotApp:
 
             # Safety / cluster — Rugcheck is free/keyless, always run it.
             tasks.append(self.rugcheck.enrich_coin(mint, {}))
+            if self.gmgn.enabled:
+                tasks.append(self.gmgn.enrich_coin(mint, "solana"))
             if is_valid_api_key(self.settings.solscan_api_key):
                 tasks.append(self.solscan.enrich_coin(mint, {}))
             if is_valid_api_key(self.settings.bubblemaps_api_key):
@@ -196,7 +208,7 @@ class BotApp:
             logger.exception("Failed to process Solana token %s", mint)
 
     async def _enrich_robinhood_coin(self, coin: CoinData) -> CoinData:
-        """DexScreener fallback for Robinhood tokens lacking price/MC data.
+        """DexScreener/GMGN fallback for Robinhood tokens lacking price/MC data.
 
         Covers Uniswap v4 launches (non-callable pool IDs) and any token the
         V3-only RPC path could not price. Verified USD windows upgrade the
@@ -210,6 +222,13 @@ class BotApp:
                 coin = normalizer.merge_enrichment(coin, enrichment)
         except Exception as exc:
             logger.debug("Robinhood Dex fallback failed for %s: %s", coin.mint, exc)
+        if self.gmgn.enabled:
+            try:
+                enrichment = await self.gmgn.enrich_coin(coin.mint, "robinhood")
+                if enrichment.get("sources", {}).get("gmgn"):
+                    coin = normalizer.merge_enrichment(coin, enrichment)
+            except Exception as exc:
+                logger.debug("Robinhood GMGN enrichment failed for %s: %s", coin.mint, exc)
         return coin
 
     async def _handle_direct_solana_token(self, coin: CoinData) -> None:
@@ -555,6 +574,75 @@ class BotApp:
                 logger.exception("Moon watch loop error")
             await asyncio.sleep(interval_seconds)
 
+    async def _gmgn_discovery_loop(self, interval_seconds: float = 30.0) -> None:
+        """Discover new tokens via GMGN Trenches (sol + robinhood).
+
+        Higher-signal than the DexScreener profile feed: launchpad filters,
+        dev-holdings data, and pre-graduation tokens (pump.fun bonding curve)
+        appear here the moment they are created.
+        """
+        logger.info("GMGN Trenches discovery started")
+        while True:
+            try:
+                if not self.gmgn.enabled:
+                    await asyncio.sleep(interval_seconds)
+                    continue
+                # Solana: pump.fun launches
+                try:
+                    sol = await self.gmgn.get_trenches(
+                        "solana", types=["new_creation"], platforms=["Pump.fun"], limit=40
+                    )
+                    for item in sol.get("new_creation", []):
+                        await self._process_gmgn_trench_item(item, "solana")
+                except Exception as exc:
+                    logger.debug("GMGN sol trenches failed: %s", exc)
+
+                # Robinhood: all new creations (native chain support!)
+                try:
+                    rh = await self.gmgn.get_trenches(
+                        "robinhood", types=["new_creation"], limit=40
+                    )
+                    for item in rh.get("new_creation", []):
+                        await self._process_gmgn_trench_item(item, "robinhood")
+                except Exception as exc:
+                    logger.debug("GMGN robinhood trenches failed: %s", exc)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("GMGN discovery loop error")
+            await asyncio.sleep(interval_seconds)
+
+    async def _process_gmgn_trench_item(self, item: dict[str, Any], chain: str) -> None:
+        """Convert a Trenches RankItem into the standard pipeline."""
+        from memecoin_alert_bot.engine.normalizer import merge_enrichment
+
+        mint = item.get("address") or item.get("token_address") or ""
+        if not mint:
+            return
+        created = item.get("creation_timestamp")
+        age_seconds = None
+        if created:
+            try:
+                age_seconds = max(0, int(import_time() - float(created)))
+            except (TypeError, ValueError):
+                pass
+
+        coin = CoinData(
+            mint=mint,
+            chain=chain,
+            symbol=item.get("symbol") or "UNKNOWN",
+            name=item.get("name") or "",
+            market_cap=_to_f(item.get("market_cap")),
+            price=_to_f(item.get("price")),
+            age_seconds=age_seconds,
+            sources={"gmgn_trenches": item},
+        )
+        # Route through the standard handlers (dedup via mint cooldown).
+        if chain == "solana":
+            await self._handle_direct_solana_token(coin)
+        else:
+            await self._handle_robinhood_token(coin)
+
     async def _outcome_tracker_loop(self, interval_seconds: float = 60.0) -> None:
         """Record calibration outcomes at +5m/+15m/+1h/+24h (guide §5).
 
@@ -704,6 +792,7 @@ class BotApp:
         outcome_task = asyncio.create_task(self._outcome_tracker_loop())
         rescan_task = asyncio.create_task(self._solana_rescan_loop())
         moon_watch_task = asyncio.create_task(self._moon_watch_loop())
+        gmgn_discovery_task = asyncio.create_task(self._gmgn_discovery_loop())
 
         try:
             await self._shutdown_event.wait()
@@ -722,6 +811,7 @@ class BotApp:
             outcome_task.cancel()
             rescan_task.cancel()
             moon_watch_task.cancel()
+            gmgn_discovery_task.cancel()
             for t in robinhood_tasks:
                 t.cancel()
                 try:
@@ -742,6 +832,10 @@ class BotApp:
                 pass
             try:
                 await moon_watch_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await gmgn_discovery_task
             except asyncio.CancelledError:
                 pass
             await self.telegram.stop()

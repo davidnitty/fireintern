@@ -128,6 +128,13 @@ def _based_bot_url(coin) -> str:
     return get_settings().based_url_template.format(ca=coin.mint)
 
 
+def _gmgn_url(coin) -> str | None:
+    """GMGN token page deep link (Solana + other listed chains)."""
+    if coin.chain == "solana":
+        return f"https://gmgn.ai/sol/token/{coin.mint}"
+    return None  # Robinhood Chain is not on gmgn.ai yet
+
+
 def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
     """Build the minimal 'Intern Signal Call' card."""
     coin = alert.coin
@@ -153,14 +160,17 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("Chart", url=coin.dexscreener_url),
         ]
     ]
+    # GMGN token page (with CA) — Solana and other listed chains.
+    gmgn = _gmgn_url(coin)
+    row2: list[InlineKeyboardButton] = []
+    if gmgn:
+        row2.append(InlineKeyboardButton("GMGN", url=gmgn))
     # Bloom and Based are EVM trading bots — show them on EVM chains only.
     if coin.chain != "solana":
-        keyboard.append(
-            [
-                InlineKeyboardButton("BloomEVM", url=_bloom_url(coin)),
-                InlineKeyboardButton("BasedBot", url=_based_bot_url(coin)),
-            ]
-        )
+        row2.append(InlineKeyboardButton("BloomEVM", url=_bloom_url(coin)))
+        row2.append(InlineKeyboardButton("BasedBot", url=_based_bot_url(coin)))
+    if row2:
+        keyboard.append(row2)
 
     newline = chr(10)
     return newline.join(lines), InlineKeyboardMarkup(keyboard)

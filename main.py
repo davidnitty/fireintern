@@ -292,6 +292,12 @@ class BotApp:
         """
         mint = coin.mint
 
+        # ── Chain switch: Solana can be silenced without touching Robinhood ──
+        if coin.chain == "solana" and not self.settings.enable_solana_alerts:
+            logger.debug("Skipping %s — Solana alerts disabled", mint)
+            await self._record_decision(coin, "solana_disabled")
+            return "solana_disabled"
+
         # ── Identity filter: never alert on unnamed/UNKNOWN tokens ──
         # This happens when enrichment failed (network timeouts) and means
         # we know almost nothing reliable about the token.
@@ -718,6 +724,7 @@ class BotApp:
 
         # PumpPortal listener setup (tokens + trades for Solana buying pressure)
         self._solana_trades: dict[str, dict[str, int]] = {}
+        pumpportal = None
 
         async def _handle_solana_trade(data: dict[str, Any]) -> None:
             mint = data.get("mint") or data.get("token")
@@ -726,10 +733,11 @@ class BotApp:
                 tracker = self._solana_trades.setdefault(mint, {"buy": 0, "sell": 0})
                 tracker[tx_type] = tracker.get(tx_type, 0) + 1
 
-        pumpportal = PumpPortalClient(
-            token_handler=self._handle_new_token,
-            trade_handler=_handle_solana_trade,
-        )
+        if self.settings.enable_solana_alerts:
+            pumpportal = PumpPortalClient(
+                token_handler=self._handle_new_token,
+                trade_handler=_handle_solana_trade,
+            )
 
         # Robinhood Chain / Pons + Noxa launchpad indexer setup
         robinhood_tasks: list[asyncio.Task] = []
@@ -779,14 +787,15 @@ class BotApp:
 
             # Solana fallback discovery via the same DexScreener feed —
             # keeps working when the PumpPortal WebSocket is unreachable.
-            self._solana_discovery = DirectDiscoveryIndexer(
-                self.dexscreener,
-                None,
-                token_handler=self._handle_direct_solana_token,
-                chain_slug="solana",
-                chain_name="solana",
-            )
-            robinhood_tasks.append(self._solana_discovery.start(interval_seconds=15.0))
+            if self.settings.enable_solana_alerts:
+                self._solana_discovery = DirectDiscoveryIndexer(
+                    self.dexscreener,
+                    None,
+                    token_handler=self._handle_direct_solana_token,
+                    chain_slug="solana",
+                    chain_name="solana",
+                )
+                robinhood_tasks.append(self._solana_discovery.start(interval_seconds=15.0))
 
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -796,17 +805,24 @@ class BotApp:
                 pass  # Windows does not support add_signal_handler for SIGTERM
 
         logger.info("Starting Memecoin Alert Bot")
-        pumpportal_task = pumpportal.start()
+        pumpportal_task = pumpportal.start() if pumpportal else None
         outcome_task = asyncio.create_task(self._outcome_tracker_loop())
-        rescan_task = asyncio.create_task(self._solana_rescan_loop())
+        rescan_task = (
+            asyncio.create_task(self._solana_rescan_loop())
+            if self.settings.enable_solana_alerts
+            else None
+        )
         moon_watch_task = asyncio.create_task(self._moon_watch_loop())
         gmgn_discovery_task = asyncio.create_task(self._gmgn_discovery_loop())
+        if not self.settings.enable_solana_alerts:
+            logger.info("Solana alerts DISABLED (ENABLE_SOLANA_ALERTS=false) — Robinhood only")
 
         try:
             await self._shutdown_event.wait()
         finally:
             logger.info("Shutting down...")
-            await pumpportal.stop()
+            if pumpportal:
+                await pumpportal.stop()
             if self._pons_indexer:
                 await self._pons_indexer.stop()
             if self._noxa_indexer:
@@ -834,10 +850,11 @@ class BotApp:
                 await outcome_task
             except asyncio.CancelledError:
                 pass
-            try:
-                await rescan_task
-            except asyncio.CancelledError:
-                pass
+            if rescan_task:
+                try:
+                    await rescan_task
+                except asyncio.CancelledError:
+                    pass
             try:
                 await moon_watch_task
             except asyncio.CancelledError:

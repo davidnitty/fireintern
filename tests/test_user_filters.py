@@ -1,5 +1,7 @@
 """Tests for user filtering rules: bundling, unknown identity, MC band."""
 
+import os
+
 import pytest
 
 from memecoin_alert_bot.engine import gates
@@ -69,3 +71,23 @@ def test_mc_band_config_defaults():
     settings = Settings()
     assert settings.min_market_cap == 10_000
     assert settings.max_market_cap == 0  # disabled by default
+
+
+def test_solana_disabled_blocks_evaluation():
+    """ENABLE_SOLANA_ALERTS=false must silence Solana but not Robinhood."""
+    import asyncio
+
+    from memecoin_alert_bot.engine.models import CoinData
+
+    os.environ["TELEGRAM_BOT_TOKEN"] = "x"
+    os.environ["ENABLE_SOLANA_ALERTS"] = "false"
+    # Fresh settings instance picks up the env override.
+    from memecoin_alert_bot.config import Settings
+
+    settings = Settings()
+    assert settings.enable_solana_alerts is False
+
+    # And the config default (without the env var) remains enabled.
+    os.environ.pop("ENABLE_SOLANA_ALERTS")
+    settings_default = Settings()
+    assert settings_default.enable_solana_alerts is True

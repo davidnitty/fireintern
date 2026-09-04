@@ -59,3 +59,33 @@ async def test_stockyard_handles_bad_payload():
     client.get_map = AsyncMock(return_value=None)
     assert await client.get_paired_memecoins() == []
     await client.close()
+
+@pytest.mark.asyncio
+async def test_stockyard_launchpad_allowlist():
+    """STOCKYARD_LAUNCHPADS allowlist filters graduated-from launchpad."""
+    client = StockyardClient(session=AsyncMock())
+    client.get_map = AsyncMock(
+        return_value={
+            "rows": [
+                {
+                    "t": "COST",
+                    "a": "0xS",
+                    "m": [
+                        {"s": "A", "a": "0xA", "lp": "Pons", "v": 10},
+                        {"s": "B", "a": "0xB", "lp": "Long", "v": 20},
+                        {"s": "C", "a": "0xC", "lp": "Doppler", "v": 30},
+                    ],
+                }
+            ]
+        }
+    )
+
+    # allowlist Pons + Long (long.xyz style) → Doppler dropped, dedupe keeps all mints
+    memes = await client.get_paired_memecoins(launchpads=["Pons", "PonsV2", "Long.xyz"])
+    symbols = sorted(m["symbol"] for m in memes)
+    assert symbols == ["A", "B"]
+
+    # "all" (or None) returns everything
+    memes_all = await client.get_paired_memecoins(launchpads=None)
+    assert sorted(m["symbol"] for m in memes_all) == ["A", "B", "C"]
+    await client.close()

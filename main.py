@@ -735,7 +735,14 @@ class BotApp:
         logger.info("StockYard discovery started (stock-pair memecoins)")
         while True:
             try:
-                memes = await self.stockyard.get_paired_memecoins()
+                launchpads = [
+                    x.strip()
+                    for x in self.settings.stockyard_launchpads.split(",")
+                    if x.strip()
+                ]
+                memes = await self.stockyard.get_paired_memecoins(
+                    launchpads=launchpads or None
+                )
                 seen = 0
                 processed = 0
                 for meme in memes:

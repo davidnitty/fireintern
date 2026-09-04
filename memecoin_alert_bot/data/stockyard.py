@@ -44,16 +44,25 @@ class StockyardClient:
         """Fetch the full stock-pair map. Returns the parsed JSON or None."""
         return await fetch_json(self.session, MAP_URL, timeout=25)
 
-    async def get_paired_memecoins(self) -> list[dict[str, Any]]:
+    async def get_paired_memecoins(
+        self, launchpads: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Flatten the map into memecoin dicts, each carrying its stock context.
 
-        Row shape (observed live): rows[] = stock tokens with
-            t (stock ticker), a (stock address), p (price),
-            sl/sv/ml/mv (stock liquidity/volume/mc), n (holders),
-            m[] = paired MEMECOINS: s symbol, a address, l liquidity,
-            v 24h volume, tx txns, cs/vs change+volume windows,
-            mc market cap, age (hours), u dexscreener pool URL, lp launchpad
+        ``launchpads`` is an allowlist of graduated-from launchpads
+        (case-insensitive, substring match both ways — "long.xyz" matches
+        lp "Long"). ``None`` or containing "all" returns every memecoin.
         """
+
+        def _allowed(lp: str | None) -> bool:
+            if not launchpads or "all" in [x.lower() for x in launchpads]:
+                return True
+            lp_lower = (lp or "").lower()
+            return any(
+                item in lp_lower or lp_lower in item
+                for item in (x.lower().strip() for x in launchpads if x.strip())
+            )
+
         data = await self.get_map()
         if not isinstance(data, dict):
             return []
@@ -66,6 +75,8 @@ class StockyardClient:
             for m in row.get("m", []) or []:
                 address = m.get("a") or ""
                 if not address:
+                    continue
+                if not _allowed(m.get("lp")):
                     continue
                 pair_id = ""
                 link = m.get("u") or ""

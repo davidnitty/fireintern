@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     enable_solana_alerts: bool = Field(default=True, alias="ENABLE_SOLANA_ALERTS")
     # StockYard feed: stock-paired memecoin discovery on Robinhood Chain.
     enable_stockyard: bool = Field(default=True, alias="ENABLE_STOCKYARD")
+    # Launchpad allowlist for stock-pair memecoins ("graduated from").
+    # Comma-separated, case-insensitive (e.g. "Pons,PonsV2,Long"), or "all".
+    stockyard_launchpads: str = Field(default="all", alias="STOCKYARD_LAUNCHPADS")
     robinhood_rpc_url: str = Field(
         default="https://rpc.mainnet.chain.robinhood.com",
         alias="ROBINHOOD_RPC_URL",

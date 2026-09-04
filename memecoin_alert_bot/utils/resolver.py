@@ -40,21 +40,44 @@ class CachedDohResolver(aiohttp.abc.AbstractResolver):
     async def close(self) -> None:  # pragma: no cover - nothing to release
         return None
 
-    async def resolve(self, host: str, port: int = 0, traces: Any = None) -> list[dict[str, Any]]:
-        if _is_ip(host):
-            return [_entry(host, port)]
+    async def resolve(
+        self,
+        host: str,
+        port: int = 0,
+        family: int = socket.AF_INET,
+        traces: Any = None,
+    ) -> list[dict[str, Any]]:
+        # IPv6 requests bypass the cache/DoH path (DoH feed is A-record only).
+        if family not in (0, socket.AF_INET) and not _is_ip(host):
+            loop = asyncio.get_running_loop()
+            infos = await loop.getaddrinfo(host, port, family=family)
+            return [
+                {
+                    "hostname": "",
+                    "host": info[4][0],
+                    "port": port,
+                    "family": info[0],
+                    "proto": 0,
+                    "flags": 0,
+                }
+                for info in infos
+            ]
 
-        cached = self._cache.get(host)
+        if _is_ip(host):
+            return [_entry(host, port, family)]
+
+        cache_key = f"{host}|{family}"
+        cached = self._cache.get(cache_key)
         if cached and cached[1] > time.time():
-            return [_entry(ip, port) for ip in cached[0]]
+            return [_entry(ip, port, family) for ip in cached[0]]
 
         # 1) system resolver
         try:
             loop = asyncio.get_running_loop()
             infos = await loop.getaddrinfo(host, port, family=socket.AF_INET)
             ips = [info[4][0] for info in infos]
-            self._store(host, ips, CACHE_TTL_DEFAULT)
-            return [_entry(ip, port) for ip in ips]
+            self._store(cache_key, ips, CACHE_TTL_DEFAULT)
+            return [_entry(ip, port, family) for ip in ips]
         except Exception as exc:
             logger.debug("System DNS failed for %s: %s", host, exc)
 
@@ -63,16 +86,16 @@ class CachedDohResolver(aiohttp.abc.AbstractResolver):
             try:
                 ips = await self._doh_resolve(endpoint, host)
                 if ips:
-                    self._store(host, ips, CACHE_TTL_DEFAULT)
+                    self._store(cache_key, ips, CACHE_TTL_DEFAULT)
                     logger.info("DoH fallback resolved %s -> %s", host, ips[0])
-                    return [_entry(ip, port) for ip in ips]
+                    return [_entry(ip, port, family) for ip in ips]
             except Exception as exc:
                 logger.debug("DoH %s failed for %s: %s", endpoint, host, exc)
 
         # 3) stale cache during prolonged outages
         if cached and (time.time() - cached[1]) < STALE_GRACE:
             logger.warning("Serving STALE DNS for %s (%s)", host, cached[0][0])
-            return [_entry(ip, port) for ip in cached[0]]
+            return [_entry(ip, port, family) for ip in cached[0]]
 
         raise OSError(f"Cannot resolve {host}")
 
@@ -90,14 +113,11 @@ class CachedDohResolver(aiohttp.abc.AbstractResolver):
 
         answers = data.get("Answer") or []
         ips = [a["data"] for a in answers if a.get("type") == 1 and a.get("data")]
-        if ips:
-            ttl = max((int(a.get("TTL", CACHE_TTL_DEFAULT)) for a in answers if a.get("type") == 1), default=CACHE_TTL_DEFAULT)
-            self._store(host, ips, ttl)
         return ips
 
-    def _store(self, host: str, ips: list[str], ttl: int) -> None:
+    def _store(self, cache_key: str, ips: list[str], ttl: int) -> None:
         clamped = max(CACHE_TTL_MIN, min(CACHE_TTL_MAX, ttl))
-        self._cache[host] = (ips, time.time() + clamped)
+        self._cache[cache_key] = (ips, time.time() + clamped)
 
 
 def _is_ip(host: str) -> bool:
@@ -110,12 +130,12 @@ def _is_ip(host: str) -> bool:
         return False
 
 
-def _entry(ip: str, port: int) -> dict[str, Any]:
+def _entry(ip: str, port: int, family: int = socket.AF_INET) -> dict[str, Any]:
     return {
         "hostname": "",
         "host": ip,
         "port": port,
-        "family": socket.AF_INET,
+        "family": family,
         "proto": 0,
         "flags": 0,
     }

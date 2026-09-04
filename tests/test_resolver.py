@@ -50,7 +50,8 @@ async def test_stale_cache_served_during_total_outage():
     # Seed an expired cache entry.
     import time
 
-    resolver._cache["old.example.com"] = (["9.9.9.9"], time.time() - 120)
+    import socket as _socket
+    resolver._cache[f"old.example.com|{_socket.AF_INET}"] = (["9.9.9.9"], time.time() - 120)
 
     async def fail_doh(endpoint, host):
         return []

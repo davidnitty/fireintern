@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     # Master switch for Solana alerts (discovery + delivery). Set false to
     # silence Solana entirely while keeping Robinhood active.
     enable_solana_alerts: bool = Field(default=True, alias="ENABLE_SOLANA_ALERTS")
+    # StockYard feed: stock-paired memecoin discovery on Robinhood Chain.
+    enable_stockyard: bool = Field(default=True, alias="ENABLE_STOCKYARD")
     robinhood_rpc_url: str = Field(
         default="https://rpc.mainnet.chain.robinhood.com",
         alias="ROBINHOOD_RPC_URL",

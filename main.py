@@ -16,6 +16,7 @@ from memecoin_alert_bot.config import get_settings
 from memecoin_alert_bot.data.bitquery import BitqueryClient
 from memecoin_alert_bot.data.bubblemaps import BubblemapsClient
 from memecoin_alert_bot.data.direct_discovery import DEXSCREENER_SLUG, DirectDiscoveryIndexer
+from memecoin_alert_bot.data.stockyard import StockyardClient
 from memecoin_alert_bot.data.gmgn import GmgnClient
 from memecoin_alert_bot.data.dexscreener import DexScreenerClient
 from memecoin_alert_bot.data.noxa import NoxaIndexer
@@ -77,6 +78,7 @@ class BotApp:
         self.bubblemaps = BubblemapsClient(self.settings.bubblemaps_api_key, self.session)
         self.bitquery = BitqueryClient(self.settings.bitquery_api_key, self.session)
         self.gmgn = GmgnClient(self.settings.gmgn_api_key, self.session)
+        self.stockyard = StockyardClient(self.session)
         self._clients = [
             self.pumpfun,
             self.dexscreener,
@@ -87,6 +89,7 @@ class BotApp:
             self.bubblemaps,
             self.bitquery,
             self.gmgn,
+            self.stockyard,
         ]
 
     async def _close_clients(self) -> None:
@@ -706,6 +709,64 @@ class BotApp:
         else:
             await self._handle_robinhood_token(coin)
 
+    async def _stockyard_discovery_loop(self, interval_seconds: float = 60.0) -> None:
+        """Discover stock-paired memecoins via the StockYard map feed.
+
+        Robinhood memecoins can trade paired against tokenized stocks (NVDA,
+        COST...). StockYard publishes the whole stock->memecoin graph with
+        live liquidity/volume — this loop evaluates never-seen pairs.
+        """
+        logger.info("StockYard discovery started (stock-pair memecoins)")
+        while True:
+            try:
+                memes = await self.stockyard.get_paired_memecoins()
+                seen = 0
+                for meme in memes:
+                    mint = meme["mint"]
+                    if await self.storage.get_coin(mint):
+                        seen += 1
+                        continue
+                    try:
+                        pair_id = meme.get("pool_id") or ""
+                        coin = CoinData(
+                            mint=mint,
+                            chain="robinhood",
+                            chain_id=4663,
+                            symbol=meme.get("symbol") or "UNKNOWN",
+                            name=meme.get("name") or "",
+                            market_cap=meme.get("market_cap"),
+                            liquidity=meme.get("liquidity"),
+                            volume_24h=meme.get("volume_24h"),
+                            age_seconds=(
+                                int(float(meme["age_hours"]) * 3600)
+                                if meme.get("age_hours") is not None
+                                else None
+                            ),
+                            pool_address=pair_id if len(pair_id) == 42 else None,
+                            sources={
+                                "stockyard": {
+                                    "stock_ticker": meme.get("stock_ticker"),
+                                    "launchpad": meme.get("launchpad"),
+                                    "tx_count": meme.get("tx_count"),
+                                }
+                            },
+                        )
+                        logger.info(
+                            "StockYard: unseen pair %s (%s on %s) — evaluating",
+                            coin.symbol,
+                            meme.get("stock_ticker"),
+                            meme.get("launchpad"),
+                        )
+                        await self._handle_robinhood_token(coin)
+                    except Exception as exc:
+                        logger.debug("StockYard token %s failed: %s", mint, exc)
+                logger.debug("StockYard pass: %d pairs, %d already seen", len(memes), seen)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("StockYard discovery loop error")
+            await asyncio.sleep(interval_seconds)
+
     async def _outcome_tracker_loop(self, interval_seconds: float = 60.0) -> None:
         """Record calibration outcomes at +5m/+15m/+1h/+24h (guide §5).
 
@@ -863,6 +924,11 @@ class BotApp:
         )
         moon_watch_task = asyncio.create_task(self._moon_watch_loop())
         gmgn_discovery_task = asyncio.create_task(self._gmgn_discovery_loop())
+        stockyard_task = (
+            asyncio.create_task(self._stockyard_discovery_loop())
+            if self.settings.enable_stockyard
+            else None
+        )
         if not self.settings.enable_solana_alerts:
             logger.info("Solana alerts DISABLED (ENABLE_SOLANA_ALERTS=false) — Robinhood only")
 
@@ -885,6 +951,8 @@ class BotApp:
             rescan_task.cancel()
             moon_watch_task.cancel()
             gmgn_discovery_task.cancel()
+            if stockyard_task:
+                stockyard_task.cancel()
             for t in robinhood_tasks:
                 t.cancel()
                 try:
@@ -912,6 +980,11 @@ class BotApp:
                 await gmgn_discovery_task
             except asyncio.CancelledError:
                 pass
+            if stockyard_task:
+                try:
+                    await stockyard_task
+                except asyncio.CancelledError:
+                    pass
             await self.telegram.stop()
             await self._close_clients()
             await self.storage.close()

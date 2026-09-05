@@ -107,11 +107,18 @@ def _fmt_mc_compact(value: float | None) -> str:
 
 
 def _maestro_url(coin) -> str:
-    """Maestro deep link — opens the user's bot with this CA pre-loaded."""
+    """Maestro deep link — opens the user's bot with this CA pre-loaded.
+
+    Template configurable via MAESTRO_URL_TEMPLATE ({ref} / {ca}) — the
+    exact start-payload format is bot-specific and may need tuning.
+    """
     from memecoin_alert_bot.config import get_settings
 
-    referral = get_settings().maestro_referral or "r-nittyberry0"
-    return f"https://t.me/maestro?start={referral}-{coin.mint}"
+    settings = get_settings()
+    return settings.maestro_url_template.format(
+        ref=settings.maestro_referral or "r-nittyberry0",
+        ca=coin.mint,
+    )
 
 
 def _bloom_url(coin) -> str:

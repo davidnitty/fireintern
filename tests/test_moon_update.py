@@ -101,3 +101,36 @@ def test_bloom_and_based_urls_embed_the_ca():
     based = _based_bot_url(coin)
     assert "ref_5I0QKYENJB_0x5d9144d2d017386519a7134Fcc7f1E4bA22f920c" in bloom
     assert "r_nittyberry0_0x5d9144d2d017386519a7134Fcc7f1E4bA22f920c" in based
+
+
+def test_moon_check_interval_decays_with_age():
+    from memecoin_alert_bot.utils.helpers import moon_check_interval_minutes
+
+    assert moon_check_interval_minutes(5) == 0.5      # fresh: every 30s
+    assert moon_check_interval_minutes(45) == 2.0     # 30m-2h: every 2 min
+    assert moon_check_interval_minutes(300) == 10.0   # up to 24h: every 10 min
+    assert moon_check_interval_minutes(1400) == 10.0
+
+
+@pytest.mark.asyncio
+async def test_has_alerted_persists(tmp_path):
+    """Once-per-mint: the alerts table remembers every called mint."""
+    storage = Storage(str(tmp_path / "once.db"))
+    await storage.connect()
+    try:
+        mint = "OnceMint1111111111111111111111111111111111111"
+        assert await storage.has_alerted(mint) is False
+        await storage.save_alert(Alert(coin=CoinData(mint=mint, symbol="ONCE")))
+        assert await storage.has_alerted(mint) is True
+        # Still true "after restart" (new connection, same file).
+        await storage.close()
+        storage2 = Storage(str(tmp_path / "once.db"))
+        await storage2.connect()
+        try:
+            assert await storage2.has_alerted(mint) is True
+        finally:
+            await storage2.close()
+        return
+    except Exception:
+        await storage.close()
+        raise

@@ -83,6 +83,17 @@ class Settings(BaseSettings):
     # Launchpad allowlist for stock-pair memecoins ("graduated from").
     # Comma-separated, case-insensitive (e.g. "Pons,PonsV2,Long"), or "all".
     stockyard_launchpads: str = Field(default="all", alias="STOCKYARD_LAUNCHPADS")
+    # Alert each mint only once, ever (persists across restarts). Prevents
+    # old alerts re-sending when discovery backfills after a restart.
+    alert_once_per_mint: bool = Field(default=True, alias="ALERT_ONCE_PER_MINT")
+    # SQLite database location. On Railway, point this at a mounted volume
+    # (e.g. /data/memecoin_alert_bot.db) so history survives redeploys.
+    db_path: str = Field(default="memecoin_alert_bot.db", alias="DB_PATH")
+    # Maestro deep-link template ({ca} = contract address).
+    maestro_url_template: str = Field(
+        default="https://t.me/maestro?start={ref}-{ca}",
+        alias="MAESTRO_URL_TEMPLATE",
+    )
     robinhood_rpc_url: str = Field(
         default="https://rpc.mainnet.chain.robinhood.com",
         alias="ROBINHOOD_RPC_URL",

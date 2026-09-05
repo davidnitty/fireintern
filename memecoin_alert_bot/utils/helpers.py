@@ -114,6 +114,21 @@ def next_moon_threshold(update_pct: float, last_multiple: float) -> float:
     return last_multiple * 2.0
 
 
+def moon_check_interval_minutes(age_minutes: float) -> float:
+    """How often to re-check an alerted token's price, by alert age.
+
+    Fresh alerts are checked every 30s (fast pumps). The cadence decays —
+    30s for the first 30 minutes, 2 minutes up to 2 hours, then 10 minutes
+    up to the 24-hour horizon — so slow, hours-long runners like a
+    $55k -> $3.7M climb are still caught well inside the move.
+    """
+    if age_minutes < 30:
+        return 0.5
+    if age_minutes < 120:
+        return 2.0
+    return 10.0
+
+
 async def fetch_metadata_json(
     session: aiohttp.ClientSession,
     uri: str,

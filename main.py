@@ -7,6 +7,8 @@ import json
 import logging
 import signal
 import sys
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
@@ -49,7 +51,7 @@ class BotApp:
     def __init__(self) -> None:
         self.settings = get_settings()
         setup_logging(self.settings.log_level)
-        self.storage = Storage()
+        self.storage = Storage(self.settings.db_path)
         self.telegram = TelegramBot(self.settings, self.storage)
         self.session: aiohttp.ClientSession | None = None
         self._clients: list[Any] = []
@@ -380,6 +382,14 @@ class BotApp:
             return "symbol_cooldown"
         self._symbol_cooldowns[coin.symbol] = now
 
+        # ── Once-per-mint: never re-alert a token we already called ──
+        # Persisted in the alerts table, so restarts/backfills can't
+        # re-send old alerts.
+        if self.settings.alert_once_per_mint and await self.storage.has_alerted(mint):
+            logger.debug("Skipping %s — already alerted before", mint)
+            await self._record_decision(coin, "already_alerted")
+            return "already_alerted"
+
         await self.storage.upsert_coin(coin)
 
         signals = detectors.run_all(coin)
@@ -499,7 +509,9 @@ class BotApp:
                         # Stop watching once fully processed, or keep watching
                         # while it still has no market/volume data, or while
                         # the global alert rate limiter is saturated.
-                        if stage not in ("mc_missing", "no_buying_activity", "rate_limited"):
+                        if stage not in (
+                            "mc_missing", "no_buying_activity", "rate_limited", "already_alerted"
+                        ):
                             await self.storage.remove_sol_watchlist(mint)
                     except Exception as exc:
                         logger.debug("Rescan failed for %s: %s", mint, exc)
@@ -563,21 +575,28 @@ class BotApp:
             logger.info("Moon update sent: %s up %.2fX cumulative", symbol, cumulative)
         return sent
 
-    async def _moon_watch_loop(self, interval_seconds: float = 30.0, window_minutes: int = 30) -> None:
-        """Fast loop: watch newly alerted tokens every 30s for 30 minutes.
+    async def _moon_watch_loop(self, tick_seconds: float = 15.0, window_minutes: int = 1440) -> None:
+        """Continuous moon watch with a 24h decaying cadence.
 
-        Fixed horizons (+5m/+15m/...) are too slow for memecoin pumps — a
-        14X can happen and retrace between snapshots. This loop samples the
-        live price continuously during the critical first half hour so the
-        ladder fires the moment it is crossed.
+        Checks every 30s for the first 30 minutes after an alert, every
+        2 minutes up to 2 hours, then every 10 minutes up to 24 hours.
+        Hours-long runners (e.g. $55k -> $3.7M over several hours) are
+        therefore still caught mid-move, not just in the first half hour.
         """
+        from memecoin_alert_bot.utils.helpers import moon_check_interval_minutes
+
         logger.info(
-            "Moon watch started (every %.0fs for %dm after each alert)",
-            interval_seconds, window_minutes,
+            "Moon watch started (24h decaying cadence: 30s -> 2m -> 10m)"
         )
+        next_check: dict[str, float] = {}
+
         while True:
             try:
                 rows = await self.storage.get_recent_alerts_for_moon(window_minutes)
+                now = time.time()
+                seen_mints = {r["mint"] for r in rows}
+                next_check = {m: t for m, t in next_check.items() if m in seen_mints}
+
                 for row in rows:
                     chain, symbol = "solana", "TOKEN"
                     mc_alert = price_alert = None
@@ -590,17 +609,33 @@ class BotApp:
                         price_alert = coin_payload.get("price")
                     except Exception:
                         pass
+
+                    age_min = 0.0
+                    try:
+                        generated = datetime.fromisoformat(row["generated_at"])
+                        age_min = (datetime.now(timezone.utc) - generated).total_seconds() / 60
+                    except Exception:
+                        pass
+                    if age_min >= window_minutes:
+                        next_check.pop(row["mint"], None)
+                        continue
+
+                    mint = row["mint"]
+                    if now < next_check.get(mint, 0):
+                        continue
+                    next_check[mint] = now + moon_check_interval_minutes(age_min) * 60
+
                     try:
                         await self._moon_check(
                             alert_id=row["id"],
-                            mint=row["mint"],
+                            mint=mint,
                             chain=chain,
                             symbol=symbol,
                             mc_alert=mc_alert,
                             price_alert=price_alert,
                         )
                     except Exception as exc:
-                        logger.debug("Moon check failed for %s: %s", row["mint"], exc)
+                        logger.debug("Moon check failed for %s: %s", mint, exc)
             except asyncio.CancelledError:
                 raise
             except Exception:

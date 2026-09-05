@@ -115,6 +115,48 @@ pytest
 - [ ] NLP-driven narrative detection
 - [ ] Historical backtesting dashboard
 
+## Deploying to Railway
+
+The bot is a long-running **worker** (Telegram polling — no web port needed).
+
+1. Push this repo to GitHub (done).
+2. On [railway.app](https://railway.app): **New Project → Deploy from GitHub repo** → pick `fireintern`.
+   Railway auto-detects Python via `requirements.txt` and the `Procfile` (`worker: python main.py`).
+3. **Add a Volume** (Service → Volumes) mounted at `/data` — SQLite must persist across deploys.
+4. **Variables** — add your secrets (never in the repo):
+
+```env
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=-100...
+TELEGRAM_CHAT_IDS=-100...
+ENABLE_SOLANA_ALERTS=false        # Robinhood-only mode
+ENABLE_PONS_ROBINHOOD=true
+ENABLE_NOXA_ROBINHOOD=true
+ENABLE_DIRECT_DISCOVERY=true
+ENABLE_STOCKYARD=true
+GMGN_API_KEY=...                  # from gmgn.ai/ai (optional, big upgrade:
+                                  # Trenches discovery + smart-money enrichment)
+DB_PATH=/data/memecoin_alert_bot.db
+MIN_MARKET_CAP=10000
+MIN_CONFIDENCE=0.35
+SOL_USD=170
+MOON_UPDATE_PCT=50
+ALERT_ONCE_PER_MINT=true
+MAESTRO_URL_TEMPLATE=https://t.me/maestro?start={ref}-{ca}
+MAESTRO_REFERRAL=r-nittyberry0
+BLOOM_URL_TEMPLATE=https://telegram.me/BloomEVMbot?start=ref_5I0QKYENJB_{ca}
+BASED_URL_TEMPLATE=https://t.me/based_eth_bot?start=r_nittyberry0_{ca}
+```
+
+5. Deploy. Check the **Deploy Logs** for `Telegram destinations configured: 2` and
+   `StockYard discovery started`.
+
+Notes:
+- The SQLite DB lives on the Volume — alerts, moon-state, and the decision
+  ledger survive redeploys.
+- `ENABLE_GMGN_TRENCHES`/GMGN key is optional; without it the bot still runs
+  Pons/Noxa/DexScreener/StockYard discovery.
+
 ## Disclaimer
 
 **Not financial advice.** This bot is an educational/research tool. Always DYOR and trade responsibly.

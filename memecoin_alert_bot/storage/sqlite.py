@@ -293,6 +293,13 @@ class Storage:
         last = datetime.fromisoformat(row[0]["last_alert_at"])
         return (datetime.now(timezone.utc) - last).total_seconds() < seconds
 
+    async def has_alerted(self, mint: str) -> bool:
+        """True when this mint was EVER alerted (persistent across restarts)."""
+        row = await self._connection.execute_fetchall(
+            "SELECT 1 FROM alerts WHERE mint = ? LIMIT 1", (mint,)
+        )
+        return bool(row)
+
     async def set_cooldown(self, mint: str) -> None:
         """Mark the current time as the last alert for a mint."""
         now = datetime.now(timezone.utc).isoformat()

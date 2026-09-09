@@ -117,3 +117,23 @@ async def test_stockpair_blocklist_persists(tmp_path):
     except Exception:
         await storage.close()
         raise
+
+
+@pytest.mark.asyncio
+async def test_get_stockpair_blocklist_roundtrip(tmp_path):
+    """Regression: run() startup calls get_stockpair_blocklist()."""
+    from memecoin_alert_bot.storage.sqlite import Storage
+
+    storage = Storage(str(tmp_path / "getblock.db"))
+    await storage.connect()
+    try:
+        assert await storage.get_stockpair_blocklist() == []
+        await storage.add_stockpair_blocklist(
+            [{"mint": "0xP1", "symbol": "HOTDOG", "stock_ticker": "COST"}]
+        )
+        rows = await storage.get_stockpair_blocklist()
+        assert len(rows) == 1
+        assert rows[0]["mint"] == "0xP1"
+        assert rows[0]["stock_ticker"] == "COST"
+    finally:
+        await storage.close()

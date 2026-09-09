@@ -314,6 +314,14 @@ class Storage:
         )
         return bool(row)
 
+    async def get_stockpair_blocklist(self) -> list[dict[str, Any]]:
+        """Return every blocked stock-pair mint (loaded at startup)."""
+        async with self._connection.execute(
+            "SELECT mint, symbol, stock_ticker, added_at FROM stockpair_blocklist"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
     async def is_on_cooldown(self, mint: str, seconds: int) -> bool:
         """Return True if an alert was sent for this mint within `seconds`."""
         row = await self._connection.execute_fetchall(

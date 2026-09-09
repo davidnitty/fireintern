@@ -55,3 +55,7 @@ Thumbs.db
 # Project runtime
 data/coins.json
 nul
+
+*.db-journal
+*.db-shm
+*.db-wal

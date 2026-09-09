@@ -95,6 +95,13 @@ CREATE TABLE IF NOT EXISTS alert_messages (
     PRIMARY KEY (alert_id, chat_id)
 );
 
+CREATE TABLE IF NOT EXISTS stockpair_blocklist (
+    mint TEXT PRIMARY KEY,
+    symbol TEXT,
+    stock_ticker TEXT,
+    added_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS sol_watchlist (
     mint TEXT PRIMARY KEY,
     symbol TEXT,
@@ -282,6 +289,30 @@ class Storage:
             "DELETE FROM sol_watchlist WHERE mint = ?", (mint,)
         )
         await self._connection.commit()
+
+    # ── Stock-pair blocklist (persistent across restarts) ───────────────
+
+    async def add_stockpair_blocklist(self, entries: list[dict[str, Any]]) -> None:
+        """Bulk-add stock-pair mints to the blocklist."""
+        now = datetime.now(timezone.utc).isoformat()
+        await self._connection.executemany(
+            """
+            INSERT INTO stockpair_blocklist (mint, symbol, stock_ticker, added_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(mint) DO NOTHING
+            """,
+            [
+                (e["mint"], e.get("symbol"), e.get("stock_ticker"), now)
+                for e in entries
+            ],
+        )
+        await self._connection.commit()
+
+    async def is_stockpair_blocked(self, mint: str) -> bool:
+        row = await self._connection.execute_fetchall(
+            "SELECT 1 FROM stockpair_blocklist WHERE mint = ? LIMIT 1", (mint,)
+        )
+        return bool(row)
 
     async def is_on_cooldown(self, mint: str, seconds: int) -> bool:
         """Return True if an alert was sent for this mint within `seconds`."""

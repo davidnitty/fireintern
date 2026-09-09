@@ -62,6 +62,7 @@ class BotApp:
         self._direct_discovery: DirectDiscoveryIndexer | None = None
         self._solana_discovery: DirectDiscoveryIndexer | None = None
         self._alert_send_times: list[float] = []  # global send-rate window
+        self._stockpair_blocklist: set[str] = set()  # stock-pair mints (persistent in DB)
         self._symbol_cooldowns: dict[str, float] = {}  # symbol -> last alert timestamp
 
     async def _init_clients(self) -> None:
@@ -303,6 +304,16 @@ class BotApp:
             logger.debug("Skipping %s — Solana alerts disabled", mint)
             await self._record_decision(coin, "solana_disabled")
             return "solana_disabled"
+
+        # ── Stock-pair switch: block known stock-pair mints on ALL paths ──
+        if (
+            coin.chain == "robinhood"
+            and not self.settings.enable_stockyard
+            and mint in self._stockpair_blocklist
+        ):
+            logger.debug("Skipping %s — stock-pair memecoin (blocked)", mint)
+            await self._record_decision(coin, "stock_pair_blocked")
+            return "stock_pair_blocked"
 
         # ── Identity filter: never alert on unnamed/UNKNOWN tokens ──
         # This happens when enrichment failed (network timeouts) and means
@@ -831,6 +842,37 @@ class BotApp:
                 logger.exception("StockYard discovery loop error")
             await asyncio.sleep(interval_seconds)
 
+    async def _stockpair_blocklist_refresh_loop(
+        self, interval_seconds: float = 600.0
+    ) -> None:
+        """Keep the stock-pair blocklist current from the StockYard map.
+
+        Runs regardless of ENABLE_STOCKYARD so that, while stock-pair alerts
+        are disabled, mints are still recognised and blocked no matter which
+        discovery path finds them.
+        """
+        while True:
+            try:
+                memes = await self.stockyard.get_paired_memecoins()
+                new_entries = [
+                    {"mint": m["mint"], "symbol": m["symbol"], "stock_ticker": m["stock_ticker"]}
+                    for m in memes
+                    if m["mint"] not in self._stockpair_blocklist
+                ]
+                if new_entries:
+                    await self.storage.add_stockpair_blocklist(new_entries)
+                    for e in new_entries:
+                        self._stockpair_blocklist.add(e["mint"])
+                    logger.info(
+                        "Stock-pair blocklist refreshed: +%d (total %d)",
+                        len(new_entries), len(self._stockpair_blocklist),
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("Stock-pair blocklist refresh failed: %s", exc)
+            await asyncio.sleep(interval_seconds)
+
     async def _outcome_tracker_loop(self, interval_seconds: float = 60.0) -> None:
         """Record calibration outcomes at +5m/+15m/+1h/+24h (guide §5).
 
@@ -988,6 +1030,19 @@ class BotApp:
         )
         moon_watch_task = asyncio.create_task(self._moon_watch_loop())
         gmgn_discovery_task = asyncio.create_task(self._gmgn_discovery_loop())
+
+        # Stock-pair blocklist: loaded from DB, then refreshed from the
+        # StockYard map every 10 min — this runs even when stock-pair
+        # alerts are disabled, so blocking stays current across paths.
+        self._stockpair_blocklist = {
+            r["mint"] for r in await self.storage.get_stockpair_blocklist()
+        }
+        logger.info(
+            "Stock-pair blocklist loaded: %d mints", len(self._stockpair_blocklist)
+        )
+        stockpair_refresh_task = asyncio.create_task(
+            self._stockpair_blocklist_refresh_loop()
+        )
         stockyard_task = (
             asyncio.create_task(self._stockyard_discovery_loop())
             if self.settings.enable_stockyard
@@ -1015,6 +1070,7 @@ class BotApp:
             rescan_task.cancel()
             moon_watch_task.cancel()
             gmgn_discovery_task.cancel()
+            stockpair_refresh_task.cancel()
             if stockyard_task:
                 stockyard_task.cancel()
             for t in robinhood_tasks:
@@ -1042,6 +1098,10 @@ class BotApp:
                 pass
             try:
                 await gmgn_discovery_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await stockpair_refresh_task
             except asyncio.CancelledError:
                 pass
             if stockyard_task:

@@ -89,3 +89,31 @@ async def test_stockyard_launchpad_allowlist():
     memes_all = await client.get_paired_memecoins(launchpads=None)
     assert sorted(m["symbol"] for m in memes_all) == ["A", "B", "C"]
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_stockpair_blocklist_persists(tmp_path):
+    """Blocklist mints persist across restarts (DB-backed)."""
+    from memecoin_alert_bot.storage.sqlite import Storage
+
+    storage = Storage(str(tmp_path / "block.db"))
+    await storage.connect()
+    try:
+        assert await storage.is_stockpair_blocked("0xPair1") is False
+        await storage.add_stockpair_blocklist(
+            [{"mint": "0xPair1", "symbol": "HOTDOG", "stock_ticker": "COST"}]
+        )
+        assert await storage.is_stockpair_blocked("0xPair1") is True
+
+        # Simulate restart: fresh connection, same file.
+        await storage.close()
+        storage2 = Storage(str(tmp_path / "block.db"))
+        await storage2.connect()
+        try:
+            assert await storage2.is_stockpair_blocked("0xPair1") is True
+        finally:
+            await storage2.close()
+        return
+    except Exception:
+        await storage.close()
+        raise

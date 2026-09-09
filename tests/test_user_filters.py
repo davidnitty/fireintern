@@ -70,7 +70,7 @@ def test_mc_band_config_defaults():
         os.environ.pop(key, None)
     settings = Settings()
     assert settings.min_market_cap == 10_000
-    assert settings.max_market_cap == 0  # disabled by default
+    assert settings.max_market_cap == 100_000  # 10k-100k focus band
 
 
 def test_solana_disabled_blocks_evaluation():

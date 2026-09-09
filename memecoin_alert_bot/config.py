@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     alert_cooldown_seconds: int = Field(default=300, alias="ALERT_COOLDOWN_SECONDS")
     min_confidence: float = Field(default=0.35, alias="MIN_CONFIDENCE")
     min_market_cap: float = Field(default=10000, alias="MIN_MARKET_CAP")
-    # 0 disables the ceiling; set e.g. 100000 to focus on the 10k–100k band.
-    max_market_cap: float = Field(default=0, alias="MAX_MARKET_CAP")
+    # Ceiling for the 10k-100k focus band the user requested. 0 disables.
+    max_market_cap: float = Field(default=100000, alias="MAX_MARKET_CAP")
     min_volume_24h: float = Field(default=0, alias="MIN_VOLUME_24H")
     sol_usd: float = Field(default=170.0, alias="SOL_USD")
     # Send a follow-up "is up NX" update when an alerted token gains this %.

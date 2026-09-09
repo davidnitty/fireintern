@@ -138,6 +138,7 @@ GMGN_API_KEY=...                  # from gmgn.ai/ai (optional, big upgrade:
                                   # Trenches discovery + smart-money enrichment)
 DB_PATH=/data/memecoin_alert_bot.db
 MIN_MARKET_CAP=10000
+MAX_MARKET_CAP=100000
 MIN_CONFIDENCE=0.35
 SOL_USD=170
 MOON_UPDATE_PCT=50

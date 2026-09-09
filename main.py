@@ -697,8 +697,24 @@ class BotApp:
                         mint = item.get("address") or item.get("token_address") or ""
                         if not mint:
                             continue
+                        if mint in self._stockpair_blocklist:
+                            continue  # stock-pair — blocked
                         if await self.storage.get_coin(mint):
                             continue  # already processed previously
+                        mc = _to_f(item.get("market_cap"))
+                        # Band filter: skip mature tokens outside the focus band
+                        if mc is None or mc < self.settings.min_market_cap:
+                            continue
+                        if (
+                            self.settings.max_market_cap > 0
+                            and mc > self.settings.max_market_cap
+                        ):
+                            continue
+                        created = item.get("creation_timestamp")
+                        if created:
+                            age_h = (import_time() - float(created)) / 3600
+                            if age_h > 6:
+                                continue  # old revival, not an early call
                         logger.info(
                             "GMGN trending: unseen robinhood token %s — evaluating",
                             item.get("symbol") or mint,
@@ -716,7 +732,9 @@ class BotApp:
                     for pair in fresh:
                         base = pair.get("baseToken") or {}
                         mint = base.get("address") or ""
-                        if not mint or await self.storage.get_coin(mint):
+                        if not mint or mint in self._stockpair_blocklist:
+                            continue
+                        if await self.storage.get_coin(mint):
                             continue
                         best = (
                             await self._direct_discovery._best_pair(mint)
@@ -747,6 +765,8 @@ class BotApp:
         mint = item.get("address") or item.get("token_address") or ""
         if not mint:
             return
+        if mint in self._stockpair_blocklist:
+            return  # stock-pair — blocked
         created = item.get("creation_timestamp")
         age_seconds = None
         if created:
@@ -843,7 +863,7 @@ class BotApp:
             await asyncio.sleep(interval_seconds)
 
     async def _stockpair_blocklist_refresh_loop(
-        self, interval_seconds: float = 600.0
+        self, interval_seconds: float = 60.0
     ) -> None:
         """Keep the stock-pair blocklist current from the StockYard map.
 
@@ -1028,6 +1048,24 @@ class BotApp:
             if self.settings.enable_solana_alerts
             else None
         )
+        # Seed the stock-pair blocklist BEFORE any discovery loop runs,
+        # so the first sweep can't alert stock-pair tokens.
+        try:
+            seed = await self.stockyard.get_paired_memecoins()
+            if seed:
+                await self.storage.add_stockpair_blocklist(
+                    [
+                        {"mint": m["mint"], "symbol": m["symbol"], "stock_ticker": m["stock_ticker"]}
+                        for m in seed
+                    ]
+                )
+                self._stockpair_blocklist |= {m["mint"] for m in seed}
+                logger.info(
+                    "Stock-pair blocklist seeded: %d mints", len(self._stockpair_blocklist)
+                )
+        except Exception as exc:
+            logger.warning("Stock-pair blocklist seed failed: %s", exc)
+
         moon_watch_task = asyncio.create_task(self._moon_watch_loop())
         gmgn_discovery_task = asyncio.create_task(self._gmgn_discovery_loop())
 

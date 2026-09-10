@@ -125,7 +125,7 @@ class DexScreenerClient:
         result["price_change_1h"] = float(price_change.get("h1", 0) or 0)
         result["liquidity"] = float(best.get("liquidity", {}).get("usd", 0) or 0)
         result["price"] = float(best.get("priceUsd", 0) or 0)
-        result["market_cap"] = float(best.get("marketCap", 0) or 0)
+        result["market_cap"] = float(best.get("marketCap") or best.get("fdv") or 0)
         result["flow_data_quality"] = "verified_usd"
         result["sources"]["dexscreener"] = best
         return result

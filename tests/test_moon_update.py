@@ -141,3 +141,35 @@ async def test_has_alerted_persists(tmp_path):
     except Exception:
         await storage.close()
         raise
+
+
+@pytest.mark.asyncio
+async def test_moon_baseline_rescue_persists(tmp_path):
+    """A NULL baseline must be filled PERSISTENTLY (regression).
+
+    If the rescue isn't persisted, every check re-anchors to the current
+    value and cumulative stays 1.0X forever — no update ever fires.
+    """
+    storage = Storage(str(tmp_path / "rescue.db"))
+    await storage.connect()
+    try:
+        mint = "RescueMint111111111111111111111111111111111"
+        # Alert with no MC/price in payload → baseline row created with NULLs
+        await storage.save_alert(Alert(coin=CoinData(mint=mint, symbol="RESC")))
+        state = await storage.ensure_moon_state(mint, None, None)
+        assert state["baseline_mc"] is None
+
+        # Rescue with current values, persisted
+        await storage.set_moon_baseline(mint, 50_000, None)
+        state = await storage.get_moon_state(mint)
+        assert state["baseline_mc"] == 50_000
+
+        # A later 1.6X move must now compute correctly
+        assert (80_000 / state["baseline_mc"]) >= 1.5
+
+        # Rescue must never overwrite an existing baseline
+        await storage.set_moon_baseline(mint, 999_999, None)
+        state = await storage.get_moon_state(mint)
+        assert state["baseline_mc"] == 50_000
+    finally:
+        await storage.close()

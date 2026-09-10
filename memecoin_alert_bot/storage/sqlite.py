@@ -515,6 +515,22 @@ class Storage:
             "last_multiple": 1.0,
         }
 
+    async def set_moon_baseline(
+        self, mint: str, mc: float | None, price: float | None
+    ) -> None:
+        """Fill a NULL moon baseline (never overwrites an existing one)."""
+        await self._connection.execute(
+            """
+            UPDATE moon_state
+               SET baseline_mc = COALESCE(baseline_mc, ?),
+                   baseline_price = COALESCE(baseline_price, ?),
+                   updated_at = ?
+             WHERE mint = ?
+            """,
+            (mc, price, datetime.now(timezone.utc).isoformat(), mint),
+        )
+        await self._connection.commit()
+
     async def set_moon_multiple(self, mint: str, multiple: float) -> None:
         """Advance the last-announced cumulative multiple for a mint."""
         await self._connection.execute(

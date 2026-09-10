@@ -522,8 +522,10 @@ class BotApp:
         update was sent.
         """
         enrichment = await self.dexscreener.enrich_coin(mint, {}, chain=chain)
-        mc_now = enrichment.get("market_cap")
-        price_now = enrichment.get("price")
+        # Treat a 0/absent value as unknown — 0 is falsy and would otherwise
+        # silently skip the MC path.
+        mc_now = enrichment.get("market_cap") or None
+        price_now = enrichment.get("price") or None
         if mc_now is None and price_now is None:
             return False
 
@@ -532,13 +534,18 @@ class BotApp:
         baseline_price = state.get("baseline_price")
         last_multiple = float(state.get("last_multiple") or 1.0)
 
-        # Baseline rescue: if the alert payload had no MC/price, adopt the
-        # current values so the token can still be tracked forward instead of
-        # being permanently stuck with a null baseline.
-        if baseline_mc is None and mc_now is not None:
-            baseline_mc = mc_now
-        if baseline_price is None and price_now is not None:
-            baseline_price = price_now
+        # Baseline rescue — PERSISTED. Without persisting, every check would
+        # re-anchor to the current value (cumulative always 1.0X) and the
+        # token could never trigger an update.
+        if baseline_mc is None or baseline_price is None:
+            await self.storage.set_moon_baseline(mint, mc_now, price_now)
+            state = await self.storage.get_moon_state(mint) or state
+            baseline_mc = state.get("baseline_mc")
+            baseline_price = state.get("baseline_price")
+            logger.info(
+                "Moon tracking started for %s (baseline MC %s)",
+                symbol, f"${baseline_mc:,.0f}" if baseline_mc else baseline_price,
+            )
 
         cumulative = None
         if baseline_mc and mc_now and baseline_mc > 0:
@@ -562,6 +569,9 @@ class BotApp:
 
         mc_from = baseline_mc if (baseline_mc and mc_now) else None
         mc_to = mc_now if (baseline_mc and mc_now) else None
+        logger.info(
+            "Moon update firing: %s %.2fX (threshold %.2fX)", symbol, cumulative, threshold
+        )
         sent = await self.telegram.send_moon_update(
             symbol, cumulative, mc_from, mc_to, alert_id=alert_id
         )

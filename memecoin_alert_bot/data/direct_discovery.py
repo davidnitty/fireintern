@@ -39,7 +39,7 @@ class DirectDiscoveryIndexer:
         dexscreener,  # DexScreenerClient
         robinhood: RobinhoodChainClient | None = None,
         token_handler: Callable[[CoinData], Any] | None = None,
-        max_age_minutes: int = 180,
+        max_age_minutes: int = 30,
         chain_slug: str = DEXSCREENER_SLUG,
         chain_name: str = "robinhood",
     ):

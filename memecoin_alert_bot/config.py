@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     bitquery_api_key: str = Field(default="", alias="BITQUERY_API_KEY")
     bubblemaps_api_key: str = Field(default="", alias="BUBBLEMAPS_API_KEY")
     gmgn_api_key: str = Field(default="", alias="GMGN_API_KEY")
+    # GMGN is OFF by default: its trending sweep surfaced tokens mid-run /
+    # already dumped. DexScreener is the primary source now.
+    enable_gmgn: bool = Field(default=False, alias="ENABLE_GMGN")
 
     # Bot behavior
     alert_cooldown_seconds: int = Field(default=300, alias="ALERT_COOLDOWN_SECONDS")

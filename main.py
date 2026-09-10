@@ -130,7 +130,7 @@ class BotApp:
 
             # Safety / cluster — Rugcheck is free/keyless, always run it.
             tasks.append(self.rugcheck.enrich_coin(mint, {}))
-            if self.gmgn.enabled:
+            if self.settings.enable_gmgn and self.gmgn.enabled:
                 tasks.append(self.gmgn.enrich_coin(mint, "solana"))
             if is_valid_api_key(self.settings.solscan_api_key):
                 tasks.append(self.solscan.enrich_coin(mint, {}))
@@ -237,7 +237,7 @@ class BotApp:
                 coin = normalizer.merge_enrichment(coin, enrichment)
         except Exception as exc:
             logger.debug("Robinhood Dex fallback failed for %s: %s", coin.mint, exc)
-        if self.gmgn.enabled:
+        if self.settings.enable_gmgn and self.gmgn.enabled:
             try:
                 enrichment = await self.gmgn.enrich_coin(coin.mint, "robinhood")
                 if enrichment.get("sources", {}).get("gmgn"):
@@ -654,109 +654,123 @@ class BotApp:
             await asyncio.sleep(interval_seconds)
 
     async def _gmgn_discovery_loop(self, interval_seconds: float = 30.0) -> None:
-        """Discover new tokens via GMGN Trenches (sol + robinhood).
+        """Robinhood sweep loop.
 
-        Higher-signal than the DexScreener profile feed: launchpad filters,
-        dev-holdings data, and pre-graduation tokens (pump.fun bonding curve)
-        appear here the moment they are created.
+        DexScreener is the primary source (fresh pairs only). GMGN passes run
+        only when ENABLE_GMGN=true AND a GMGN key is configured — it is OFF
+        by default because its trending sweep surfaced tokens already mid-run
+        or dumped.
         """
-        logger.info("GMGN Trenches discovery started")
+        gmgn_on = self.settings.enable_gmgn and self.gmgn.enabled
+        logger.info(
+            "Robinhood sweep loop started (GMGN %s, DexScreener sweep active)",
+            "ON" if gmgn_on else "OFF",
+        )
         while True:
             try:
-                if not self.gmgn.enabled:
-                    await asyncio.sleep(interval_seconds)
-                    continue
-                # Solana: pump.fun launches
-                try:
-                    sol = await self.gmgn.get_trenches(
-                        "solana", types=["new_creation"], platforms=["Pump.fun"], limit=40
-                    )
-                    for item in sol.get("new_creation", []):
-                        await self._process_gmgn_trench_item(item, "solana")
-                except Exception as exc:
-                    logger.debug("GMGN sol trenches failed: %s", exc)
-
-                # Robinhood: all new creations (native chain support!)
-                try:
-                    rh = await self.gmgn.get_trenches(
-                        "robinhood", types=["new_creation"], limit=40
-                    )
-                    for item in rh.get("new_creation", []):
-                        await self._process_gmgn_trench_item(item, "robinhood")
-                except Exception as exc:
-                    logger.debug("GMGN robinhood trenches failed: %s", exc)
-
-                # Robinhood trending (1m): sweeps up non-Pons tokens that
-                # already have live activity but were missed at creation —
-                # only tokens never processed before are evaluated.
-                try:
-                    trending = await self.gmgn.get_trending(
-                        "robinhood", interval="1m", limit=50, order_by="swaps"
-                    )
-                    for item in trending:
-                        mint = item.get("address") or item.get("token_address") or ""
-                        if not mint:
-                            continue
-                        if mint in self._stockpair_blocklist:
-                            continue  # stock-pair — blocked
-                        if await self.storage.get_coin(mint):
-                            continue  # already processed previously
-                        mc = _to_f(item.get("market_cap"))
-                        # Band filter: skip mature tokens outside the focus band
-                        if mc is None or mc < self.settings.min_market_cap:
-                            continue
-                        if (
-                            self.settings.max_market_cap > 0
-                            and mc > self.settings.max_market_cap
-                        ):
-                            continue
-                        created = item.get("creation_timestamp")
-                        if created:
-                            age_h = (import_time() - float(created)) / 3600
-                            if age_h > 6:
-                                continue  # old revival, not an early call
-                        logger.info(
-                            "GMGN trending: unseen robinhood token %s — evaluating",
-                            item.get("symbol") or mint,
-                        )
-                        await self._process_gmgn_trench_item(item, "robinhood")
-                except Exception as exc:
-                    logger.debug("GMGN robinhood trending failed: %s", exc)
-
-                # DexScreener sweep: fresh robinhood pairs via search —
-                # GMGN and Dex jointly cover non-Pons launches.
-                try:
-                    fresh = await self.dexscreener.get_new_pairs(
-                        DEXSCREENER_SLUG, max_age_minutes=60
-                    )
-                    for pair in fresh:
-                        base = pair.get("baseToken") or {}
-                        mint = base.get("address") or ""
-                        if not mint or mint in self._stockpair_blocklist:
-                            continue
-                        if await self.storage.get_coin(mint):
-                            continue
-                        best = (
-                            await self._direct_discovery._best_pair(mint)
-                            if self._direct_discovery
-                            else None
-                        )
-                        if not best:
-                            continue
-                        coin = await self._direct_discovery._build_coin(mint, best)
-                        if coin:
-                            logger.info(
-                                "Dex sweep: unseen robinhood token %s — evaluating",
-                                coin.symbol,
-                            )
-                            await self._handle_robinhood_token(coin)
-                except Exception as exc:
-                    logger.debug("Dex robinhood sweep failed: %s", exc)
+                if gmgn_on:
+                    await self._gmgn_trenches_pass()
+                    await self._gmgn_trending_pass()
+                await self._dexscreener_sweep_pass()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("GMGN discovery loop error")
+                logger.exception("Robinhood sweep loop error")
             await asyncio.sleep(interval_seconds)
+
+    async def _gmgn_trenches_pass(self) -> None:
+        """GMGN Trenches new-creation sweep (sol + robinhood, optional)."""
+        try:
+            sol = await self.gmgn.get_trenches(
+                "solana", types=["new_creation"], platforms=["Pump.fun"], limit=40
+            )
+            for item in sol.get("new_creation", []):
+                await self._process_gmgn_trench_item(item, "solana")
+        except Exception as exc:
+            logger.debug("GMGN sol trenches failed: %s", exc)
+
+        try:
+            rh = await self.gmgn.get_trenches(
+                "robinhood", types=["new_creation"], limit=40
+            )
+            for item in rh.get("new_creation", []):
+                await self._process_gmgn_trench_item(item, "robinhood")
+        except Exception as exc:
+            logger.debug("GMGN robinhood trenches failed: %s", exc)
+
+    async def _gmgn_trending_pass(self) -> None:
+        """GMGN robinhood trending (1m) — unseen, in-band, fresh tokens only."""
+        try:
+            trending = await self.gmgn.get_trending(
+                "robinhood", interval="1m", limit=50, order_by="swaps"
+            )
+            for item in trending:
+                mint = item.get("address") or item.get("token_address") or ""
+                if not mint:
+                    continue
+                if mint in self._stockpair_blocklist:
+                    continue  # stock-pair — blocked
+                if await self.storage.get_coin(mint):
+                    continue  # already processed previously
+                mc = _to_f(item.get("market_cap"))
+                if mc is None or mc < self.settings.min_market_cap:
+                    continue
+                if (
+                    self.settings.max_market_cap > 0
+                    and mc > self.settings.max_market_cap
+                ):
+                    continue
+                created = item.get("creation_timestamp")
+                if created:
+                    age_h = (import_time() - float(created)) / 3600
+                    if age_h > 6:
+                        continue  # old revival, not an early call
+                logger.info(
+                    "GMGN trending: unseen robinhood token %s — evaluating",
+                    item.get("symbol") or mint,
+                )
+                await self._process_gmgn_trench_item(item, "robinhood")
+        except Exception as exc:
+            logger.debug("GMGN robinhood trending failed: %s", exc)
+
+    async def _dexscreener_sweep_pass(self, max_age_minutes: int = 30) -> None:
+        """DexScreener sweep: freshly-created robinhood pairs only.
+
+        Tight 30-minute window so alerts land BEFORE a token has already run
+        and dumped (the old 60-180m windows were catching exhausted pumps).
+        """
+        try:
+            fresh = await self.dexscreener.get_new_pairs(
+                DEXSCREENER_SLUG, max_age_minutes=max_age_minutes
+            )
+            for pair in fresh:
+                base = pair.get("baseToken") or {}
+                mint = base.get("address") or ""
+                if not mint or mint in self._stockpair_blocklist:
+                    continue
+                if await self.storage.get_coin(mint):
+                    continue
+                mc = _to_f(pair.get("marketCap"))
+                if mc is None or mc < self.settings.min_market_cap:
+                    continue
+                if self.settings.max_market_cap > 0 and mc > self.settings.max_market_cap:
+                    continue
+                best = (
+                    await self._direct_discovery._best_pair(mint)
+                    if self._direct_discovery
+                    else None
+                )
+                if not best:
+                    continue
+                coin = await self._direct_discovery._build_coin(mint, best)
+                if coin:
+                    logger.info(
+                        "Dex sweep: unseen robinhood token %s — evaluating",
+                        coin.symbol,
+                    )
+                    await self._handle_robinhood_token(coin)
+        except Exception as exc:
+            logger.debug("Dex robinhood sweep failed: %s", exc)
 
     async def _process_gmgn_trench_item(self, item: dict[str, Any], chain: str) -> None:
         """Convert a Trenches RankItem into the standard pipeline."""

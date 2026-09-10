@@ -173,3 +173,57 @@ async def test_moon_baseline_rescue_persists(tmp_path):
         assert state["baseline_mc"] == 50_000
     finally:
         await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_moon_update_end_to_end_51k_to_404k(tmp_path, monkeypatch):
+    """Full path: alert at $51k, live price $404k => 7.92X update sent."""
+    import importlib
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "e2e.db"))
+    monkeypatch.setenv("MOON_UPDATE_PCT", "50")
+
+    from memecoin_alert_bot import config
+
+    config._settings = None  # reset cached settings for this env
+
+    import main as main_module
+
+    importlib.reload(main_module)
+    from memecoin_alert_bot.engine.models import Alert, CoinData
+
+    class StubDex:
+        async def enrich_coin(self, mint, base, chain="solana"):
+            return {"market_cap": 404_000, "price": 0.000404}
+
+    class StubTelegram:
+        def __init__(self):
+            self.sent = []
+
+        async def send_moon_update(self, symbol, multiple, mc_from, mc_to, alert_id=None):
+            self.sent.append((symbol, round(multiple, 2), mc_from, mc_to))
+            return True
+
+    app = main_module.BotApp()
+    await app.storage.connect()
+    try:
+        app.dexscreener = StubDex()
+        app.telegram = StubTelegram()
+
+        mint = "0x3889d404800a7f9D752A736356a7CF298F7Ac2fb".lower()
+        coin = CoinData(
+            mint=mint, chain="robinhood", symbol="XCOIN",
+            market_cap=51_000, volume_24h=10_000,
+        )
+        alert_id = await app.storage.save_alert(Alert(coin=coin))
+
+        sent = await app._moon_check(
+            alert_id=alert_id, mint=mint, chain="robinhood", symbol="XCOIN",
+            mc_alert=51_000, price_alert=None,
+        )
+        assert sent is True
+        assert app.telegram.sent == [("XCOIN", 7.92, 51_000, 404_000)]
+    finally:
+        await app.storage.close()
+        config._settings = None

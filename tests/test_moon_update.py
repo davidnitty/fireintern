@@ -12,13 +12,20 @@ from memecoin_alert_bot.utils.helpers import next_moon_threshold
 
 def test_first_threshold_is_update_pct():
     assert next_moon_threshold(50, 1.0) == 1.5
+    assert next_moon_threshold(25, 1.0) == 1.25
     assert next_moon_threshold(100, 1.0) == 2.0
 
 
-def test_subsequent_thresholds_double_from_last_announced():
-    assert next_moon_threshold(50, 20.5) == 41.0
-    assert next_moon_threshold(50, 41.0) == 82.0
-    assert next_moon_threshold(50, 1.5) == 3.0
+def test_percent_mode_steps_by_pct():
+    # 25% mode: 1.25 -> 1.5625 -> 1.953125 ...
+    assert next_moon_threshold(25, 1.25, "percent") == pytest.approx(1.5625)
+    assert next_moon_threshold(25, 1.5625, "percent") == pytest.approx(1.953125)
+
+
+def test_ladder_mode_doubles():
+    assert next_moon_threshold(50, 20.5, "ladder") == 41.0
+    assert next_moon_threshold(50, 41.0, "ladder") == 82.0
+    assert next_moon_threshold(50, 1.5, "ladder") == 3.0
 
 
 @pytest.mark.asyncio

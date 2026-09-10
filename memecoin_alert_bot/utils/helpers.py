@@ -100,18 +100,26 @@ def is_valid_api_key(key: str) -> bool:
     return not key.strip().lower().startswith(placeholder_prefixes)
 
 
-def next_moon_threshold(update_pct: float, last_multiple: float) -> float:
+def next_moon_threshold(
+    update_pct: float, last_multiple: float, mode: str = "percent"
+) -> float:
     """Cumulative multiple required for the next moon update.
 
     First update fires at ``1 + update_pct%`` above the original call
-    (e.g. 50% => 1.5X). Every subsequent update fires when the token
-    **doubles** from the last announced level (20.5X -> 41X -> 82X ...),
-    matching the expected cumulative behaviour.
+    (e.g. 25% => 1.25X).
+
+    Then, depending on ``mode``:
+      - "percent" (default): fire again every further ``update_pct%``
+        (1.25 -> 1.56 -> 1.95 ...) — steady feedback as the price climbs.
+      - "ladder": fire only when the multiple doubles from the last
+        announced level (1.25 -> 2.5 -> 5 -> 10) — fewer, bigger updates.
     """
-    first = 1.0 + update_pct / 100.0
+    step = 1.0 + update_pct / 100.0
     if last_multiple <= 1.0:
-        return first
-    return last_multiple * 2.0
+        return step
+    if mode == "ladder":
+        return last_multiple * 2.0
+    return last_multiple * step
 
 
 def moon_check_interval_minutes(age_minutes: float) -> float:

@@ -542,7 +542,9 @@ class BotApp:
 
         from memecoin_alert_bot.utils.helpers import next_moon_threshold
 
-        threshold = next_moon_threshold(self.settings.moon_update_pct, last_multiple)
+        threshold = next_moon_threshold(
+            self.settings.moon_update_pct, last_multiple, self.settings.moon_update_mode
+        )
         if cumulative < threshold or cumulative <= last_multiple:
             return False
 

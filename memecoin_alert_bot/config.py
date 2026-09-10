@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     min_volume_24h: float = Field(default=0, alias="MIN_VOLUME_24H")
     sol_usd: float = Field(default=170.0, alias="SOL_USD")
     # Send a follow-up "is up NX" update when an alerted token gains this %.
-    moon_update_pct: float = Field(default=25.0, alias="MOON_UPDATE_PCT")
+    moon_update_pct: float = Field(default=50.0, alias="MOON_UPDATE_PCT")
     # After the first update: "percent" = every further N%, "ladder" = on
     # each doubling of the multiple.
     moon_update_mode: str = Field(default="percent", alias="MOON_UPDATE_MODE")

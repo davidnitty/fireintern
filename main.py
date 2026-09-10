@@ -532,6 +532,14 @@ class BotApp:
         baseline_price = state.get("baseline_price")
         last_multiple = float(state.get("last_multiple") or 1.0)
 
+        # Baseline rescue: if the alert payload had no MC/price, adopt the
+        # current values so the token can still be tracked forward instead of
+        # being permanently stuck with a null baseline.
+        if baseline_mc is None and mc_now is not None:
+            baseline_mc = mc_now
+        if baseline_price is None and price_now is not None:
+            baseline_price = price_now
+
         cumulative = None
         if baseline_mc and mc_now and baseline_mc > 0:
             cumulative = mc_now / baseline_mc
@@ -544,6 +552,10 @@ class BotApp:
 
         threshold = next_moon_threshold(
             self.settings.moon_update_pct, last_multiple, self.settings.moon_update_mode
+        )
+        logger.debug(
+            "Moon check %s: cum=%.2fX last=%.2fX threshold=%.2fX",
+            symbol, cumulative, last_multiple, threshold,
         )
         if cumulative < threshold or cumulative <= last_multiple:
             return False
@@ -562,7 +574,7 @@ class BotApp:
             logger.info("Moon update sent: %s up %.2fX cumulative", symbol, cumulative)
         return sent
 
-    async def _moon_watch_loop(self, tick_seconds: float = 15.0, window_minutes: int = 1440) -> None:
+    async def _moon_watch_loop(self, tick_seconds: float = 15.0, window_minutes: int = 4320) -> None:
         """Continuous moon watch with a 24h decaying cadence.
 
         Checks every 30s for the first 30 minutes after an alert, every
@@ -573,7 +585,7 @@ class BotApp:
         from memecoin_alert_bot.utils.helpers import moon_check_interval_minutes
 
         logger.info(
-            "Moon watch started (24h decaying cadence: 30s -> 2m -> 10m)"
+            "Moon watch started (72h decaying cadence: 30s -> 2m -> 10m)"
         )
         next_check: dict[str, float] = {}
 

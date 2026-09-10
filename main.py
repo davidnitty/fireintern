@@ -18,8 +18,6 @@ from memecoin_alert_bot.config import get_settings
 from memecoin_alert_bot.data.bitquery import BitqueryClient
 from memecoin_alert_bot.data.bubblemaps import BubblemapsClient
 from memecoin_alert_bot.data.direct_discovery import DEXSCREENER_SLUG, DirectDiscoveryIndexer
-from memecoin_alert_bot.data.stockyard import StockyardClient
-from memecoin_alert_bot.data.gmgn import GmgnClient
 from memecoin_alert_bot.data.dexscreener import DexScreenerClient
 from memecoin_alert_bot.data.noxa import NoxaIndexer
 from memecoin_alert_bot.data.pons import PonsIndexer
@@ -62,7 +60,6 @@ class BotApp:
         self._direct_discovery: DirectDiscoveryIndexer | None = None
         self._solana_discovery: DirectDiscoveryIndexer | None = None
         self._alert_send_times: list[float] = []  # global send-rate window
-        self._stockpair_blocklist: set[str] = set()  # stock-pair mints (persistent in DB)
         self._symbol_cooldowns: dict[str, float] = {}  # symbol -> last alert timestamp
 
     async def _init_clients(self) -> None:
@@ -81,8 +78,6 @@ class BotApp:
         self.robinhood = RobinhoodChainClient(self.settings.robinhood_rpc_url, self.session)
         self.bubblemaps = BubblemapsClient(self.settings.bubblemaps_api_key, self.session)
         self.bitquery = BitqueryClient(self.settings.bitquery_api_key, self.session)
-        self.gmgn = GmgnClient(self.settings.gmgn_api_key, self.session)
-        self.stockyard = StockyardClient(self.session)
         self._clients = [
             self.pumpfun,
             self.dexscreener,
@@ -92,8 +87,6 @@ class BotApp:
             self.robinhood,
             self.bubblemaps,
             self.bitquery,
-            self.gmgn,
-            self.stockyard,
         ]
 
     async def _close_clients(self) -> None:
@@ -130,8 +123,6 @@ class BotApp:
 
             # Safety / cluster — Rugcheck is free/keyless, always run it.
             tasks.append(self.rugcheck.enrich_coin(mint, {}))
-            if self.settings.enable_gmgn and self.gmgn.enabled:
-                tasks.append(self.gmgn.enrich_coin(mint, "solana"))
             if is_valid_api_key(self.settings.solscan_api_key):
                 tasks.append(self.solscan.enrich_coin(mint, {}))
             if is_valid_api_key(self.settings.bubblemaps_api_key):
@@ -223,7 +214,7 @@ class BotApp:
             logger.exception("Failed to process Solana token %s", mint)
 
     async def _enrich_robinhood_coin(self, coin: CoinData) -> CoinData:
-        """DexScreener/GMGN fallback for Robinhood tokens lacking price/MC data.
+        """DexScreener fallback for Robinhood tokens lacking price/MC data.
 
         Covers Uniswap v4 launches (non-callable pool IDs) and any token the
         V3-only RPC path could not price. Verified USD windows upgrade the
@@ -237,13 +228,6 @@ class BotApp:
                 coin = normalizer.merge_enrichment(coin, enrichment)
         except Exception as exc:
             logger.debug("Robinhood Dex fallback failed for %s: %s", coin.mint, exc)
-        if self.settings.enable_gmgn and self.gmgn.enabled:
-            try:
-                enrichment = await self.gmgn.enrich_coin(coin.mint, "robinhood")
-                if enrichment.get("sources", {}).get("gmgn"):
-                    coin = normalizer.merge_enrichment(coin, enrichment)
-            except Exception as exc:
-                logger.debug("Robinhood GMGN enrichment failed for %s: %s", coin.mint, exc)
         return coin
 
     async def _handle_direct_solana_token(self, coin: CoinData) -> None:
@@ -304,16 +288,6 @@ class BotApp:
             logger.debug("Skipping %s — Solana alerts disabled", mint)
             await self._record_decision(coin, "solana_disabled")
             return "solana_disabled"
-
-        # ── Stock-pair switch: block known stock-pair mints on ALL paths ──
-        if (
-            coin.chain == "robinhood"
-            and not self.settings.enable_stockyard
-            and mint in self._stockpair_blocklist
-        ):
-            logger.debug("Skipping %s — stock-pair memecoin (blocked)", mint)
-            await self._record_decision(coin, "stock_pair_blocked")
-            return "stock_pair_blocked"
 
         # ── Identity filter: never alert on unnamed/UNKNOWN tokens ──
         # This happens when enrichment failed (network timeouts) and means
@@ -653,24 +627,15 @@ class BotApp:
                 logger.exception("Moon watch loop error")
             await asyncio.sleep(interval_seconds)
 
-    async def _gmgn_discovery_loop(self, interval_seconds: float = 30.0) -> None:
-        """Robinhood sweep loop.
+    async def _robinhood_sweep_loop(self, interval_seconds: float = 30.0) -> None:
+        """DexScreener-only sweep for freshly-created Robinhood pairs.
 
-        DexScreener is the primary source (fresh pairs only). GMGN passes run
-        only when ENABLE_GMGN=true AND a GMGN key is configured — it is OFF
-        by default because its trending sweep surfaced tokens already mid-run
-        or dumped.
+        Sources are Pons, Noxa, and this DexScreener fresh-pair sweep. The
+        tight 30-minute window means calls land BEFORE a token has run.
         """
-        gmgn_on = self.settings.enable_gmgn and self.gmgn.enabled
-        logger.info(
-            "Robinhood sweep loop started (GMGN %s, DexScreener sweep active)",
-            "ON" if gmgn_on else "OFF",
-        )
+        logger.info("DexScreener Robinhood sweep started (30m fresh window)")
         while True:
             try:
-                if gmgn_on:
-                    await self._gmgn_trenches_pass()
-                    await self._gmgn_trending_pass()
                 await self._dexscreener_sweep_pass()
             except asyncio.CancelledError:
                 raise
@@ -678,67 +643,8 @@ class BotApp:
                 logger.exception("Robinhood sweep loop error")
             await asyncio.sleep(interval_seconds)
 
-    async def _gmgn_trenches_pass(self) -> None:
-        """GMGN Trenches new-creation sweep (sol + robinhood, optional)."""
-        try:
-            sol = await self.gmgn.get_trenches(
-                "solana", types=["new_creation"], platforms=["Pump.fun"], limit=40
-            )
-            for item in sol.get("new_creation", []):
-                await self._process_gmgn_trench_item(item, "solana")
-        except Exception as exc:
-            logger.debug("GMGN sol trenches failed: %s", exc)
-
-        try:
-            rh = await self.gmgn.get_trenches(
-                "robinhood", types=["new_creation"], limit=40
-            )
-            for item in rh.get("new_creation", []):
-                await self._process_gmgn_trench_item(item, "robinhood")
-        except Exception as exc:
-            logger.debug("GMGN robinhood trenches failed: %s", exc)
-
-    async def _gmgn_trending_pass(self) -> None:
-        """GMGN robinhood trending (1m) — unseen, in-band, fresh tokens only."""
-        try:
-            trending = await self.gmgn.get_trending(
-                "robinhood", interval="1m", limit=50, order_by="swaps"
-            )
-            for item in trending:
-                mint = item.get("address") or item.get("token_address") or ""
-                if not mint:
-                    continue
-                if mint in self._stockpair_blocklist:
-                    continue  # stock-pair — blocked
-                if await self.storage.get_coin(mint):
-                    continue  # already processed previously
-                mc = _to_f(item.get("market_cap"))
-                if mc is None or mc < self.settings.min_market_cap:
-                    continue
-                if (
-                    self.settings.max_market_cap > 0
-                    and mc > self.settings.max_market_cap
-                ):
-                    continue
-                created = item.get("creation_timestamp")
-                if created:
-                    age_h = (import_time() - float(created)) / 3600
-                    if age_h > 6:
-                        continue  # old revival, not an early call
-                logger.info(
-                    "GMGN trending: unseen robinhood token %s — evaluating",
-                    item.get("symbol") or mint,
-                )
-                await self._process_gmgn_trench_item(item, "robinhood")
-        except Exception as exc:
-            logger.debug("GMGN robinhood trending failed: %s", exc)
-
     async def _dexscreener_sweep_pass(self, max_age_minutes: int = 30) -> None:
-        """DexScreener sweep: freshly-created robinhood pairs only.
-
-        Tight 30-minute window so alerts land BEFORE a token has already run
-        and dumped (the old 60-180m windows were catching exhausted pumps).
-        """
+        """Evaluate freshly-created robinhood pairs from the DexScreener feed."""
         try:
             fresh = await self.dexscreener.get_new_pairs(
                 DEXSCREENER_SLUG, max_age_minutes=max_age_minutes
@@ -746,7 +652,7 @@ class BotApp:
             for pair in fresh:
                 base = pair.get("baseToken") or {}
                 mint = base.get("address") or ""
-                if not mint or mint in self._stockpair_blocklist:
+                if not mint:
                     continue
                 if await self.storage.get_coin(mint):
                     continue
@@ -771,141 +677,6 @@ class BotApp:
                     await self._handle_robinhood_token(coin)
         except Exception as exc:
             logger.debug("Dex robinhood sweep failed: %s", exc)
-
-    async def _process_gmgn_trench_item(self, item: dict[str, Any], chain: str) -> None:
-        """Convert a Trenches RankItem into the standard pipeline."""
-        from memecoin_alert_bot.engine.normalizer import merge_enrichment
-
-        mint = item.get("address") or item.get("token_address") or ""
-        if not mint:
-            return
-        if mint in self._stockpair_blocklist:
-            return  # stock-pair — blocked
-        created = item.get("creation_timestamp")
-        age_seconds = None
-        if created:
-            try:
-                age_seconds = max(0, int(import_time() - float(created)))
-            except (TypeError, ValueError):
-                pass
-
-        coin = CoinData(
-            mint=mint,
-            chain=chain,
-            symbol=item.get("symbol") or "UNKNOWN",
-            name=item.get("name") or "",
-            market_cap=_to_f(item.get("market_cap")),
-            price=_to_f(item.get("price")),
-            age_seconds=age_seconds,
-            sources={"gmgn_trenches": item},
-        )
-        # Route through the standard handlers (dedup via mint cooldown).
-        if chain == "solana":
-            await self._handle_direct_solana_token(coin)
-        else:
-            await self._handle_robinhood_token(coin)
-
-    async def _stockyard_discovery_loop(self, interval_seconds: float = 60.0) -> None:
-        """Discover stock-paired memecoins via the StockYard map feed.
-
-        Robinhood memecoins can trade paired against tokenized stocks (NVDA,
-        COST...). StockYard publishes the whole stock->memecoin graph with
-        live liquidity/volume — this loop evaluates never-seen pairs.
-        """
-        logger.info("StockYard discovery started (stock-pair memecoins)")
-        while True:
-            try:
-                launchpads = [
-                    x.strip()
-                    for x in self.settings.stockyard_launchpads.split(",")
-                    if x.strip()
-                ]
-                memes = await self.stockyard.get_paired_memecoins(
-                    launchpads=launchpads or None
-                )
-                seen = 0
-                processed = 0
-                for meme in memes:
-                    mint = meme["mint"]
-                    if await self.storage.get_coin(mint):
-                        seen += 1
-                        continue
-                    # Trickle: bootstrap backlogs (hundreds of unseen pairs)
-                    # must not flood the channel — spread across cycles.
-                    if processed >= 6:
-                        continue
-                    processed += 1
-                    try:
-                        pair_id = meme.get("pool_id") or ""
-                        coin = CoinData(
-                            mint=mint,
-                            chain="robinhood",
-                            chain_id=4663,
-                            symbol=meme.get("symbol") or "UNKNOWN",
-                            name=meme.get("name") or "",
-                            market_cap=meme.get("market_cap"),
-                            liquidity=meme.get("liquidity"),
-                            volume_24h=meme.get("volume_24h"),
-                            age_seconds=(
-                                int(float(meme["age_hours"]) * 3600)
-                                if meme.get("age_hours") is not None
-                                else None
-                            ),
-                            pool_address=pair_id if len(pair_id) == 42 else None,
-                            sources={
-                                "stockyard": {
-                                    "stock_ticker": meme.get("stock_ticker"),
-                                    "launchpad": meme.get("launchpad"),
-                                    "tx_count": meme.get("tx_count"),
-                                }
-                            },
-                        )
-                        logger.info(
-                            "StockYard: unseen pair %s (%s on %s) — evaluating",
-                            coin.symbol,
-                            meme.get("stock_ticker"),
-                            meme.get("launchpad"),
-                        )
-                        await self._handle_robinhood_token(coin)
-                    except Exception as exc:
-                        logger.debug("StockYard token %s failed: %s", mint, exc)
-                logger.debug("StockYard pass: %d pairs, %d already seen", len(memes), seen)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("StockYard discovery loop error")
-            await asyncio.sleep(interval_seconds)
-
-    async def _stockpair_blocklist_refresh_loop(
-        self, interval_seconds: float = 60.0
-    ) -> None:
-        """Keep the stock-pair blocklist current from the StockYard map.
-
-        Runs regardless of ENABLE_STOCKYARD so that, while stock-pair alerts
-        are disabled, mints are still recognised and blocked no matter which
-        discovery path finds them.
-        """
-        while True:
-            try:
-                memes = await self.stockyard.get_paired_memecoins()
-                new_entries = [
-                    {"mint": m["mint"], "symbol": m["symbol"], "stock_ticker": m["stock_ticker"]}
-                    for m in memes
-                    if m["mint"] not in self._stockpair_blocklist
-                ]
-                if new_entries:
-                    await self.storage.add_stockpair_blocklist(new_entries)
-                    for e in new_entries:
-                        self._stockpair_blocklist.add(e["mint"])
-                    logger.info(
-                        "Stock-pair blocklist refreshed: +%d (total %d)",
-                        len(new_entries), len(self._stockpair_blocklist),
-                    )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.debug("Stock-pair blocklist refresh failed: %s", exc)
-            await asyncio.sleep(interval_seconds)
 
     async def _outcome_tracker_loop(self, interval_seconds: float = 60.0) -> None:
         """Record calibration outcomes at +5m/+15m/+1h/+24h (guide §5).
@@ -1062,44 +833,9 @@ class BotApp:
             if self.settings.enable_solana_alerts
             else None
         )
-        # Seed the stock-pair blocklist BEFORE any discovery loop runs,
-        # so the first sweep can't alert stock-pair tokens.
-        try:
-            seed = await self.stockyard.get_paired_memecoins()
-            if seed:
-                await self.storage.add_stockpair_blocklist(
-                    [
-                        {"mint": m["mint"], "symbol": m["symbol"], "stock_ticker": m["stock_ticker"]}
-                        for m in seed
-                    ]
-                )
-                self._stockpair_blocklist |= {m["mint"] for m in seed}
-                logger.info(
-                    "Stock-pair blocklist seeded: %d mints", len(self._stockpair_blocklist)
-                )
-        except Exception as exc:
-            logger.warning("Stock-pair blocklist seed failed: %s", exc)
-
         moon_watch_task = asyncio.create_task(self._moon_watch_loop())
-        gmgn_discovery_task = asyncio.create_task(self._gmgn_discovery_loop())
+        sweep_task = asyncio.create_task(self._robinhood_sweep_loop())
 
-        # Stock-pair blocklist: loaded from DB, then refreshed from the
-        # StockYard map every 10 min — this runs even when stock-pair
-        # alerts are disabled, so blocking stays current across paths.
-        self._stockpair_blocklist = {
-            r["mint"] for r in await self.storage.get_stockpair_blocklist()
-        }
-        logger.info(
-            "Stock-pair blocklist loaded: %d mints", len(self._stockpair_blocklist)
-        )
-        stockpair_refresh_task = asyncio.create_task(
-            self._stockpair_blocklist_refresh_loop()
-        )
-        stockyard_task = (
-            asyncio.create_task(self._stockyard_discovery_loop())
-            if self.settings.enable_stockyard
-            else None
-        )
         if not self.settings.enable_solana_alerts:
             logger.info("Solana alerts DISABLED (ENABLE_SOLANA_ALERTS=false) — Robinhood only")
 
@@ -1121,10 +857,7 @@ class BotApp:
             outcome_task.cancel()
             rescan_task.cancel()
             moon_watch_task.cancel()
-            gmgn_discovery_task.cancel()
-            stockpair_refresh_task.cancel()
-            if stockyard_task:
-                stockyard_task.cancel()
+            sweep_task.cancel()
             for t in robinhood_tasks:
                 t.cancel()
                 try:
@@ -1149,18 +882,9 @@ class BotApp:
             except asyncio.CancelledError:
                 pass
             try:
-                await gmgn_discovery_task
+                await sweep_task
             except asyncio.CancelledError:
                 pass
-            try:
-                await stockpair_refresh_task
-            except asyncio.CancelledError:
-                pass
-            if stockyard_task:
-                try:
-                    await stockyard_task
-                except asyncio.CancelledError:
-                    pass
             await self.telegram.stop()
             await self._close_clients()
             await self.storage.close()

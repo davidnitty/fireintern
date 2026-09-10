@@ -37,10 +37,6 @@ class Settings(BaseSettings):
     codex_api_key: str = Field(default="", alias="CODEX_API_KEY")
     bitquery_api_key: str = Field(default="", alias="BITQUERY_API_KEY")
     bubblemaps_api_key: str = Field(default="", alias="BUBBLEMAPS_API_KEY")
-    gmgn_api_key: str = Field(default="", alias="GMGN_API_KEY")
-    # GMGN is OFF by default: its trending sweep surfaced tokens mid-run /
-    # already dumped. DexScreener is the primary source now.
-    enable_gmgn: bool = Field(default=False, alias="ENABLE_GMGN")
 
     # Bot behavior
     alert_cooldown_seconds: int = Field(default=300, alias="ALERT_COOLDOWN_SECONDS")
@@ -81,11 +77,6 @@ class Settings(BaseSettings):
     # Master switch for Solana alerts (discovery + delivery). Set false to
     # silence Solana entirely while keeping Robinhood active.
     enable_solana_alerts: bool = Field(default=True, alias="ENABLE_SOLANA_ALERTS")
-    # StockYard feed: stock-paired memecoin discovery on Robinhood Chain.
-    enable_stockyard: bool = Field(default=True, alias="ENABLE_STOCKYARD")
-    # Launchpad allowlist for stock-pair memecoins ("graduated from").
-    # Comma-separated, case-insensitive (e.g. "Pons,PonsV2,Long"), or "all".
-    stockyard_launchpads: str = Field(default="all", alias="STOCKYARD_LAUNCHPADS")
     # Alert each mint only once, ever (persists across restarts). Prevents
     # old alerts re-sending when discovery backfills after a restart.
     alert_once_per_mint: bool = Field(default=True, alias="ALERT_ONCE_PER_MINT")

@@ -95,13 +95,6 @@ CREATE TABLE IF NOT EXISTS alert_messages (
     PRIMARY KEY (alert_id, chat_id)
 );
 
-CREATE TABLE IF NOT EXISTS stockpair_blocklist (
-    mint TEXT PRIMARY KEY,
-    symbol TEXT,
-    stock_ticker TEXT,
-    added_at TEXT
-);
-
 CREATE TABLE IF NOT EXISTS sol_watchlist (
     mint TEXT PRIMARY KEY,
     symbol TEXT,
@@ -290,38 +283,6 @@ class Storage:
         )
         await self._connection.commit()
 
-    # ── Stock-pair blocklist (persistent across restarts) ───────────────
-
-    async def add_stockpair_blocklist(self, entries: list[dict[str, Any]]) -> None:
-        """Bulk-add stock-pair mints to the blocklist."""
-        now = datetime.now(timezone.utc).isoformat()
-        await self._connection.executemany(
-            """
-            INSERT INTO stockpair_blocklist (mint, symbol, stock_ticker, added_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(mint) DO NOTHING
-            """,
-            [
-                (e["mint"], e.get("symbol"), e.get("stock_ticker"), now)
-                for e in entries
-            ],
-        )
-        await self._connection.commit()
-
-    async def is_stockpair_blocked(self, mint: str) -> bool:
-        row = await self._connection.execute_fetchall(
-            "SELECT 1 FROM stockpair_blocklist WHERE mint = ? LIMIT 1", (mint,)
-        )
-        return bool(row)
-
-    async def get_stockpair_blocklist(self) -> list[dict[str, Any]]:
-        """Return every blocked stock-pair mint (loaded at startup)."""
-        async with self._connection.execute(
-            "SELECT mint, symbol, stock_ticker, added_at FROM stockpair_blocklist"
-        ) as cursor:
-            rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
-
     async def is_on_cooldown(self, mint: str, seconds: int) -> bool:
         """Return True if an alert was sent for this mint within `seconds`."""
         row = await self._connection.execute_fetchall(
@@ -331,13 +292,6 @@ class Storage:
             return False
         last = datetime.fromisoformat(row[0]["last_alert_at"])
         return (datetime.now(timezone.utc) - last).total_seconds() < seconds
-
-    async def has_alerted(self, mint: str) -> bool:
-        """True when this mint was EVER alerted (persistent across restarts)."""
-        row = await self._connection.execute_fetchall(
-            "SELECT 1 FROM alerts WHERE mint = ? LIMIT 1", (mint,)
-        )
-        return bool(row)
 
     async def set_cooldown(self, mint: str) -> None:
         """Mark the current time as the last alert for a mint."""
@@ -349,6 +303,36 @@ class Storage:
             ON CONFLICT(mint) DO UPDATE SET last_alert_at = excluded.last_alert_at
             """,
             (mint, now),
+        )
+        await self._connection.commit()
+
+    async def has_alerted(self, mint: str) -> bool:
+        """True when this mint was EVER alerted (persistent across restarts)."""
+        row = await self._connection.execute_fetchall(
+            "SELECT 1 FROM alerts WHERE mint = ? LIMIT 1", (mint,)
+        )
+        return bool(row)
+
+    async def get_chain_state(self, chain: str) -> dict[str, Any] | None:
+        """Fetch persisted chain scanner state."""
+        async with self._connection.execute(
+            "SELECT * FROM chain_state WHERE chain = ?", (chain,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def set_chain_state(self, chain: str, last_block: int) -> None:
+        """Persist the last scanned block/index for a chain."""
+        now = datetime.now(timezone.utc).isoformat()
+        await self._connection.execute(
+            """
+            INSERT INTO chain_state (chain, last_block, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(chain) DO UPDATE SET
+                last_block = excluded.last_block,
+                updated_at = excluded.updated_at
+            """,
+            (chain, last_block, now),
         )
         await self._connection.commit()
 
@@ -374,44 +358,6 @@ class Storage:
             ),
         )
         await self._connection.commit()
-
-    async def get_chain_state(self, chain: str) -> dict[str, Any] | None:
-        """Fetch persisted chain scanner state."""
-        async with self._connection.execute(
-            "SELECT * FROM chain_state WHERE chain = ?", (chain,)
-        ) as cursor:
-            row = await cursor.fetchone()
-        return dict(row) if row else None
-
-    async def set_chain_state(self, chain: str, last_block: int) -> None:
-        """Persist the last scanned block for a chain."""
-        now = datetime.now(timezone.utc).isoformat()
-        await self._connection.execute(
-            """
-            INSERT INTO chain_state (chain, last_block, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(chain) DO UPDATE SET
-                last_block = excluded.last_block,
-                updated_at = excluded.updated_at
-            """,
-            (chain, last_block, now),
-        )
-        await self._connection.commit()
-
-    async def recent_alerts(
-        self, limit: int = 20, verdict: str | None = None
-    ) -> list[dict[str, Any]]:
-        """Return recent alerts with optional verdict filter."""
-        query = "SELECT * FROM alerts"
-        params = ()
-        if verdict:
-            query += " WHERE verdict = ?"
-            params = (verdict,)
-        query += " ORDER BY generated_at DESC LIMIT ?"
-        params += (limit,)
-        async with self._connection.execute(query, params) as cursor:
-            rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
 
     # ── Backtesting ledger (guide §5) ────────────────────────────────────
 
@@ -445,11 +391,7 @@ class Storage:
         await self._connection.commit()
 
     async def get_alerts_without_outcomes(self, horizons: list[int]) -> list[dict[str, Any]]:
-        """Return (alert_id, mint, generated_at, payload, horizon) rows needing outcomes.
-
-        A row is due when ``now >= alert_time + horizon`` and no outcome row
-        exists yet for that (alert, horizon) pair.
-        """
+        """Return (alert_id, mint, generated_at, payload, horizon) rows needing outcomes."""
         now = datetime.now(timezone.utc)
         async with self._connection.execute(
             "SELECT id, mint, generated_at, payload FROM alerts ORDER BY id"
@@ -469,8 +411,7 @@ class Storage:
             for horizon in horizons:
                 if (row["id"], horizon) in existing:
                     continue
-                due_at = alert_at + timedelta(minutes=horizon)
-                if now >= due_at:
+                if now >= alert_at + timedelta(minutes=horizon):
                     due.append(
                         {
                             "alert_id": row["id"],
@@ -520,22 +461,6 @@ class Storage:
         await self._connection.commit()
         return pct
 
-    async def moon_update_sent(self, alert_id: int) -> bool:
-        """True when a follow-up moon update was already sent for this alert."""
-        async with self._connection.execute(
-            "SELECT 1 FROM alert_outcomes WHERE alert_id = ? AND update_sent = 1 LIMIT 1",
-            (alert_id,),
-        ) as cursor:
-            return await cursor.fetchone() is not None
-
-    async def mark_moon_update_sent(self, alert_id: int) -> None:
-        """Flag every horizon row of this alert so the update sends only once."""
-        await self._connection.execute(
-            "UPDATE alert_outcomes SET update_sent = 1 WHERE alert_id = ?",
-            (alert_id,),
-        )
-        await self._connection.commit()
-
     # ── Cumulative moon state (per mint, not per alert) ─────────────────
 
     async def get_moon_state(self, mint: str) -> dict[str, Any] | None:
@@ -551,9 +476,8 @@ class Storage:
     ) -> dict[str, Any]:
         """Get or create the cumulative moon baseline for a mint.
 
-        On first creation the baseline is anchored to the **earliest alert**
-        for this mint (so re-alerts during a pump never reset the multiple),
-        falling back to the provided values when no prior alert exists.
+        On first creation the baseline anchors to the EARLIEST alert for this
+        mint (so re-alerts during a pump never reset the multiple).
         """
         state = await self.get_moon_state(mint)
         if state:
@@ -594,19 +518,13 @@ class Storage:
     async def set_moon_multiple(self, mint: str, multiple: float) -> None:
         """Advance the last-announced cumulative multiple for a mint."""
         await self._connection.execute(
-            """
-            UPDATE moon_state SET last_multiple = ?, updated_at = ? WHERE mint = ?
-            """,
+            "UPDATE moon_state SET last_multiple = ?, updated_at = ? WHERE mint = ?",
             (multiple, datetime.now(timezone.utc).isoformat(), mint),
         )
         await self._connection.commit()
 
     async def get_recent_alerts_for_moon(self, window_minutes: int = 30) -> list[dict[str, Any]]:
-        """Distinct recently-alerted mints for continuous moon watching.
-
-        Returns the LATEST alert per mint within the window (re-alerts must
-        not reset the cumulative multiple — moon_state owns the baseline).
-        """
+        """Distinct recently-alerted mints for continuous moon watching."""
         since = (datetime.now(timezone.utc) - timedelta(minutes=window_minutes)).isoformat()
         async with self._connection.execute(
             """

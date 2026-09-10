@@ -133,9 +133,6 @@ ENABLE_SOLANA_ALERTS=false        # Robinhood-only mode
 ENABLE_PONS_ROBINHOOD=true
 ENABLE_NOXA_ROBINHOOD=true
 ENABLE_DIRECT_DISCOVERY=true
-ENABLE_STOCKYARD=true
-GMGN_API_KEY=...                  # from gmgn.ai/ai (optional, big upgrade:
-                                  # Trenches discovery + smart-money enrichment)
 DB_PATH=/data/memecoin_alert_bot.db
 MIN_MARKET_CAP=10000
 MAX_MARKET_CAP=100000
@@ -150,13 +147,12 @@ BASED_URL_TEMPLATE=https://t.me/based_eth_bot?start=r_nittyberry0_{ca}
 ```
 
 5. Deploy. Check the **Deploy Logs** for `Telegram destinations configured: 2` and
-   `StockYard discovery started`.
+   `DexScreener Robinhood sweep started (30m fresh window)`.
 
 Notes:
 - The SQLite DB lives on the Volume — alerts, moon-state, and the decision
   ledger survive redeploys.
-- `ENABLE_GMGN_TRENCHES`/GMGN key is optional; without it the bot still runs
-  Pons/Noxa/DexScreener/StockYard discovery.
+- Sources: Pons, Noxa, and the DexScreener fresh-pair sweep (30m window).
 
 ## Disclaimer
 

@@ -1,5 +1,6 @@
 """Tests for cumulative moon-update feedback."""
 
+import asyncio
 import pytest
 
 from memecoin_alert_bot.engine.models import Alert, CoinData
@@ -224,6 +225,67 @@ async def test_moon_update_end_to_end_51k_to_404k(tmp_path, monkeypatch):
         )
         assert sent is True
         assert app.telegram.sent == [("XCOIN", 7.92, 51_000, 404_000)]
+    finally:
+        await app.storage.close()
+        config._settings = None
+
+
+@pytest.mark.asyncio
+async def test_moon_watch_loop_survives_and_fires(tmp_path, monkeypatch):
+    """Regression: the watch LOOP must not die on its own sleep call.
+
+    A stale `interval_seconds` reference in the loop's sleep crashed the
+    task seconds after startup, so no update ever fired regardless of how
+    far a token pumped (observed: $18k -> $1.02M with no update).
+    """
+    import importlib
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "loop.db"))
+    monkeypatch.setenv("MOON_UPDATE_PCT", "50")
+
+    from memecoin_alert_bot import config
+
+    config._settings = None
+
+    import main as main_module
+
+    importlib.reload(main_module)
+    from memecoin_alert_bot.engine.models import Alert, CoinData
+
+    class StubDex:
+        async def enrich_coin(self, mint, base, chain="solana"):
+            return {"market_cap": 1_020_000, "price": 0.00102}
+
+    class StubTelegram:
+        def __init__(self):
+            self.sent = []
+
+        async def send_moon_update(self, symbol, multiple, mc_from, mc_to, alert_id=None):
+            self.sent.append((symbol, round(multiple, 2), mc_from, mc_to))
+            return True
+
+    app = main_module.BotApp()
+    await app.storage.connect()
+    try:
+        app.dexscreener = StubDex()
+        app.telegram = StubTelegram()
+
+        mint = "0xcfb30b23d93bcc055c243db715d3e2d1c2facf09"
+        await app.storage.save_alert(
+            Alert(coin=CoinData(mint=mint, chain="robinhood", symbol="XCOIN",
+                                market_cap=18_000, volume_24h=9_000))
+        )
+
+        # Run the real loop briefly; it must survive multiple ticks.
+        try:
+            await asyncio.wait_for(
+                app._moon_watch_loop(tick_seconds=1, window_minutes=4320), timeout=3
+            )
+        except asyncio.TimeoutError:
+            pass  # expected: the loop runs forever
+
+        assert app.telegram.sent == [("XCOIN", 56.67, 18_000.0, 1_020_000)]
     finally:
         await app.storage.close()
         config._settings = None

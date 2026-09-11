@@ -649,7 +649,10 @@ class BotApp:
                 raise
             except Exception:
                 logger.exception("Moon watch loop error")
-            await asyncio.sleep(interval_seconds)
+            try:
+                await asyncio.sleep(tick_seconds)
+            except asyncio.CancelledError:
+                raise
 
     async def _robinhood_sweep_loop(self, interval_seconds: float = 30.0) -> None:
         """DexScreener-only sweep for freshly-created Robinhood pairs.

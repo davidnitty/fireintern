@@ -93,6 +93,18 @@ def _short_addr(addr: str) -> str:
 # ── Main formatter ────────────────────────────────────────────────────────
 
 
+def _sell_status(coin) -> str:
+    """Sell-route verification shown on the card."""
+    verdict = getattr(coin.safety, "sell_verdict", None)
+    if verdict == "verified_sellable":
+        return "✅ verified"
+    if verdict == "sell_blocked":
+        return "⛔ BLOCKED (honeypot)"
+    if verdict == "unverified":
+        return "⚠️ unverified"
+    return "—"
+
+
 def _fmt_mc_compact(value: float | None) -> str:
     """Market cap like 10K, 163K, 1.3M (matches the sample card)."""
     if value is None:
@@ -149,6 +161,7 @@ def format_alert(alert: Alert) -> tuple[str, InlineKeyboardMarkup]:
         f"💲 Ticker: {coin.symbol}",
         f"📊 Market Cap: {_fmt_mc_compact(coin.market_cap)}",
         f"⏱ Age: {age}",
+        f"🛡 Sell: {_sell_status(coin)}",
         "",
         "🔗 Contract Address:",
         f"`{coin.mint}`",

@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     # (e.g. /data/memecoin_alert_bot.db) so history survives redeploys.
     db_path: str = Field(default="memecoin_alert_bot.db", alias="DB_PATH")
     # Maestro deep-link template ({ca} = contract address).
+    # EVM safety policy (Robinhood Chain)
+    # true  = only alert tokens whose SELL route was behaviourally verified
+    # false = also alert unverified-sell tokens, but flagged on the card
+    evm_require_sell_verified: bool = Field(default=False, alias="EVM_REQUIRE_SELL_VERIFIED")
+    # Block tokens with positive risk evidence (blocked sell, or unverified
+    # sell combined with blacklist/control selectors in the bytecode).
+    evm_block_on_risk: bool = Field(default=True, alias="EVM_BLOCK_ON_RISK")
     maestro_url_template: str = Field(
         default="https://t.me/maestro?start={ref}-{ca}",
         alias="MAESTRO_URL_TEMPLATE",

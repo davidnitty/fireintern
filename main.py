@@ -18,6 +18,7 @@ from memecoin_alert_bot.config import get_settings
 from memecoin_alert_bot.data.bitquery import BitqueryClient
 from memecoin_alert_bot.data.bubblemaps import BubblemapsClient
 from memecoin_alert_bot.data.direct_discovery import DEXSCREENER_SLUG, DirectDiscoveryIndexer
+from memecoin_alert_bot.data.evm_safety import EvmSafetyClient
 from memecoin_alert_bot.data.dexscreener import DexScreenerClient
 from memecoin_alert_bot.data.noxa import NoxaIndexer
 from memecoin_alert_bot.data.pons import PonsIndexer
@@ -76,6 +77,7 @@ class BotApp:
         self.solscan = SolscanClient(self.settings.solscan_api_key, self.session)
         self.x_api = XApiClient(self.settings.x_bearer_token, self.session)
         self.robinhood = RobinhoodChainClient(self.settings.robinhood_rpc_url, self.session)
+        self.evm_safety = EvmSafetyClient(self.robinhood)
         self.bubblemaps = BubblemapsClient(self.settings.bubblemaps_api_key, self.session)
         self.bitquery = BitqueryClient(self.settings.bitquery_api_key, self.session)
         self._clients = [
@@ -228,6 +230,15 @@ class BotApp:
                 coin = normalizer.merge_enrichment(coin, enrichment)
         except Exception as exc:
             logger.debug("Robinhood Dex fallback failed for %s: %s", coin.mint, exc)
+
+        # Behavioural safety: simulate a sell (honeypots burn LP and renounce
+        # ownership to look safe, so only an actual sell test catches them).
+        try:
+            safety = await self.evm_safety.analyze(coin.mint, coin.pool_address)
+            if safety.get("safety"):
+                coin = normalizer.merge_enrichment(coin, safety)
+        except Exception as exc:
+            logger.debug("EVM safety check failed for %s: %s", coin.mint, exc)
         return coin
 
     async def _handle_direct_solana_token(self, coin: CoinData) -> None:

@@ -69,6 +69,9 @@ class SafetyInfo(BaseModel):
     bundled_pct: float = 0.0
     rugcheck_score: int | None = None
     is_honeypot: bool | None = None
+    # EVM sellability verification: verified_sellable | sell_blocked | unverified
+    sell_verdict: str | None = None
+    risk_flags: list[str] = Field(default_factory=list)
 
 
 class CoinData(BaseModel):

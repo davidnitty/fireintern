@@ -28,6 +28,18 @@ def _gate(gate: str, passed: bool | None, detail: str = "") -> GateResult:
     return GateResult(gate=gate, passed=bool(passed), status=status, detail=detail)
 
 
+def _require_sell_verified() -> bool:
+    import os
+
+    return os.environ.get("EVM_REQUIRE_SELL_VERIFIED", "false").lower() in ("1", "true", "yes")
+
+
+def settings_block_on_risk() -> bool:
+    import os
+
+    return os.environ.get("EVM_BLOCK_ON_RISK", "true").lower() in ("1", "true", "yes")
+
+
 def evaluate_gates(coin: CoinData) -> tuple[bool, list[GateResult], bool]:
     """Return (critical_passed, gate_results, has_unknown_critical).
 
@@ -70,7 +82,25 @@ def evaluate_gates(coin: CoinData) -> tuple[bool, list[GateResult], bool]:
         )
 
     # ── Sellability / venue ──
-    gates.append(_gate("sellability", has_venue, "exit venue identified" if has_venue else "no exit venue"))
+    # A verified blocked sell is a hard failure (honeypot); an unverified
+    # sell route counts as unknown (caps tier, never blocks outright).
+    verdict = coin.safety.sell_verdict
+    flags = coin.safety.risk_flags or []
+    risky_flags = any("blacklist" in f for f in flags)
+
+    if verdict == "sell_blocked":
+        gates.append(_gate("sellability", False, "SELL BLOCKED (honeypot pattern)"))
+    elif _require_sell_verified() and verdict != "verified_sellable":
+        # Strict policy: nothing alerts unless a sell was actually verified.
+        gates.append(_gate("sellability", False, "sell route not verified (policy)"))
+    elif verdict == "unverified":
+        # Unverified sell + blacklist/control selectors = treat as unsafe.
+        if settings_block_on_risk() and risky_flags:
+            gates.append(_gate("sellability", False, f"unverified sell + risky contract ({', '.join(flags[:3])})"))
+        else:
+            gates.append(_gate("sellability", None, "sell route unverified"))
+    else:
+        gates.append(_gate("sellability", has_venue, "exit venue identified" if has_venue else "no exit venue"))
 
     # ── Liquidity ──
     if coin.liquidity is None:

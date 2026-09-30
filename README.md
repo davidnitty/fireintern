@@ -123,7 +123,8 @@ The bot is a long-running **worker** (Telegram polling — no web port needed).
 2. On [railway.app](https://railway.app): **New Project → Deploy from GitHub repo** → pick `fireintern`.
    Railway auto-detects Python via `requirements.txt` and the `Procfile` (`worker: python main.py`).
 3. **Add a Volume** (Service → Volumes) mounted at `/data` — SQLite must persist across deploys.
-4. **Variables** — add your secrets (never in the repo):
+4. **Variables** — add ALL config in the dashboard (railway.env is
+   gitignored and stays on your machine only):
 
 ```env
 TELEGRAM_BOT_TOKEN=...

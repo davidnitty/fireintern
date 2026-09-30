@@ -59,3 +59,5 @@ nul
 *.db-journal
 *.db-shm
 *.db-wal
+
+railway.env

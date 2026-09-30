@@ -87,7 +87,8 @@ def test_solana_disabled_blocks_evaluation():
     settings = Settings()
     assert settings.enable_solana_alerts is False
 
-    # And the config default (without the env var) remains enabled.
+    # And the config default (without the env var OR the committed file)
+    # remains enabled — _env_file=None bypasses railway.env/.env.
     os.environ.pop("ENABLE_SOLANA_ALERTS")
-    settings_default = Settings()
+    settings_default = Settings(_env_file=None)
     assert settings_default.enable_solana_alerts is True

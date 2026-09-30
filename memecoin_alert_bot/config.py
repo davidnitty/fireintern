@@ -8,7 +8,10 @@ class Settings(BaseSettings):
     """Runtime settings for the memecoin alert bot."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # railway.env is committed (private repo) and carries production
+        # defaults; a local .env (gitignored) overrides it for testing.
+        # Dashboard/host variables override both.
+        env_file=(".env", "railway.env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
